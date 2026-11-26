@@ -5,12 +5,12 @@ Work through these phases sequentially. Check off items only after running verif
 ---
 
 ## Phase 0: Workspace & Infrastructure Bootstrap
-- [ ] Initialize monorepo structure (`apps/web`, `apps/api`, `evals`, `docs`).
-- [ ] Create `docker-compose.yml` with PostgreSQL 16 and Redis.
-- [ ] Create `.env.example` and `.gitignore` (ensuring `.env`, `__pycache__`, `node_modules`, `.next` are ignored).
-- [ ] Scaffold FastAPI app in `apps/api` with `/api/health`, SQLAlchemy async engine, and Alembic migrations.
-- [ ] Scaffold Next.js 15 + Tailwind + shadcn/ui app in `apps/web` with TypeScript strict mode.
-- [ ] Verify both services start cleanly and `apps/web` can reach `apps/api/health`.
+- [x] Initialize monorepo structure (`apps/web`, `apps/api`, `evals`, `docs`).
+- [x] Create `docker-compose.yml` with PostgreSQL 16 and Redis.
+- [x] Create `.env.example` and `.gitignore` (ensuring `.env`, `__pycache__`, `node_modules`, `.next` are ignored).
+- [x] Scaffold FastAPI app in `apps/api` with `/api/health`, SQLAlchemy async engine, and Alembic migrations.
+- [x] Scaffold Next.js 15 + Tailwind + shadcn/ui app in `apps/web` with TypeScript strict mode.
+- [x] Verify both services start cleanly and `apps/web` can reach `apps/api/health`.
 
 ## Phase 1: Deterministic AST Engine (Tree-sitter)
 - [ ] Implement `LanguageAdapter` interface in `apps/api/app/parser/base.py`.
