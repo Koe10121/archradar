@@ -47,6 +47,8 @@ IGNORED_DIRS = frozenset(
 _GITHUB_REPO_RE = re.compile(
     r"^https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?$"
 )
+MAX_ZIPBALL_BYTES = 25 * 1024 * 1024
+MAX_INDEXED_FILES = 600
 
 
 def parse_github_repo_url(url: str) -> tuple[str, str]:
@@ -81,6 +83,13 @@ class RepoIndexer:
                 continue
             ensure_within_root(resolved_root, path)
             files.append((rel_posix, path))
+            if len(files) >= MAX_INDEXED_FILES:
+                logger.warning(
+                    "Repository %s reached MAX_INDEXED_FILES (%d); truncating remaining files",
+                    resolved_root,
+                    MAX_INDEXED_FILES,
+                )
+                break
 
         return files
 
@@ -241,26 +250,42 @@ class RepoIndexer:
             headers["Authorization"] = f"Bearer {github_token}"
 
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-            meta_resp = await client.get(
-                f"https://api.github.com/repos/{owner}/{name}",
-                headers=headers,
-            )
-            meta_resp.raise_for_status()
-            meta = meta_resp.json()
-            target_branch = branch or str(meta.get("default_branch") or "main")
+            try:
+                meta_resp = await client.get(
+                    f"https://api.github.com/repos/{owner}/{name}",
+                    headers=headers,
+                )
+                meta_resp.raise_for_status()
+                meta = meta_resp.json()
+                target_branch = branch or str(meta.get("default_branch") or "main")
 
-            commit_resp = await client.get(
-                f"https://api.github.com/repos/{owner}/{name}/commits/{target_branch}",
-                headers=headers,
-            )
-            commit_resp.raise_for_status()
-            commit_sha = str(commit_resp.json().get("sha") or target_branch)
+                commit_resp = await client.get(
+                    f"https://api.github.com/repos/{owner}/{name}/commits/{target_branch}",
+                    headers=headers,
+                )
+                commit_resp.raise_for_status()
+                commit_sha = str(commit_resp.json().get("sha") or target_branch)
 
-            zip_resp = await client.get(
-                f"https://api.github.com/repos/{owner}/{name}/zipball/{commit_sha}",
-                headers=headers,
+                zip_resp = await client.get(
+                    f"https://api.github.com/repos/{owner}/{name}/zipball/{commit_sha}",
+                    headers=headers,
+                )
+                zip_resp.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code == 404:
+                    raise ValueError(
+                        f"GitHub repository or branch not found (or private): {owner}/{name}"
+                    ) from exc
+                if exc.response.status_code in {403, 429}:
+                    raise ValueError(
+                        "GitHub API rate limit exceeded. Configure GITHUB_TOKEN or retry shortly."
+                    ) from exc
+                raise
+
+        if len(zip_resp.content) > MAX_ZIPBALL_BYTES:
+            raise ValueError(
+                "Repository archive exceeds the 25 MB size limit for serverless indexing."
             )
-            zip_resp.raise_for_status()
 
         with tempfile.TemporaryDirectory(prefix="archradar_") as tmp_dir:
             extract_root = Path(tmp_dir)

@@ -59,6 +59,7 @@ async function requestJson<T>(
     isServer?: boolean;
     method?: "GET" | "POST";
     body?: Record<string, unknown>;
+    timeoutMs?: number;
   }
 ): Promise<ApiResult<T>> {
   const isServer = options?.isServer ?? false;
@@ -72,7 +73,7 @@ async function requestJson<T>(
     const response = await fetch(`${baseUrl}${path}`, {
       method: options?.method ?? "GET",
       cache: "no-store",
-      signal: AbortSignal.timeout(4000),
+      signal: AbortSignal.timeout(options?.timeoutMs ?? 8000),
       headers: {
         Accept: "application/json",
         ...(options?.body ? { "Content-Type": "application/json" } : {}),
@@ -222,6 +223,7 @@ export async function indexRepository(payload: {
   return requestJson("/api/repos/index", RepoIndexResponseSchema, {
     method: "POST",
     body: payload,
+    timeoutMs: 45_000,
   });
 }
 
@@ -241,6 +243,7 @@ export async function analyzePullRequest(
     {
       method: "POST",
       body: payload,
+      timeoutMs: 45_000,
     }
   );
 }

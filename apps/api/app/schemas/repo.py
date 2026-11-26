@@ -1,7 +1,6 @@
 """Pydantic schemas for repository indexing and graph retrieval."""
 
 from datetime import datetime
-from pathlib import Path
 from typing import Literal
 from uuid import UUID
 
@@ -22,10 +21,6 @@ class RepoIndexRequest(BaseModel):
         has_local = bool(self.local_path and self.local_path.strip())
         if not has_url and not has_local:
             raise ValueError("Either repo_url or local_path must be provided.")
-        if has_local and self.local_path is not None:
-            resolved = Path(self.local_path).resolve()
-            if not resolved.is_dir():
-                raise ValueError(f"local_path does not exist or is not a directory: {resolved}")
         return self
 
 

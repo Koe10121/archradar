@@ -43,6 +43,14 @@ async def index_repository(
     async with session_factory() as session:
         try:
             if payload.local_path:
+                if not settings.local_path_indexing_enabled:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail=(
+                            "Local directory indexing is disabled in cloud deployments. "
+                            "Submit a public GitHub repository URL instead."
+                        ),
+                    )
                 local_dir = Path(payload.local_path).resolve()
                 repo_name = local_dir.name or "local-repo"
                 repo_url = (payload.repo_url or f"local://{repo_name}").strip()

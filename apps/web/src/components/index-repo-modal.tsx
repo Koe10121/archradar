@@ -23,6 +23,7 @@ export function IndexRepoModal({
   onClose,
   onIndexed,
 }: IndexRepoModalProps): React.JSX.Element | null {
+  const showLocalOption = process.env.NODE_ENV !== "production";
   const [sourceType, setSourceType] = useState<"github" | "local">("github");
   const [repoUrl, setRepoUrl] = useState("");
   const [localPath, setLocalPath] = useState("");
@@ -94,26 +95,28 @@ export function IndexRepoModal({
         </div>
 
         <form onSubmit={(e) => void handleSubmit(e)} className="space-y-4 p-5 text-sm">
-          <div className="flex gap-2">
-            <Button
-              type="button"
-              size="sm"
-              variant={sourceType === "github" ? "default" : "outline"}
-              onClick={() => setSourceType("github")}
-            >
-              GitHub Repo URL
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant={sourceType === "local" ? "default" : "outline"}
-              onClick={() => setSourceType("local")}
-            >
-              Local Directory Path
-            </Button>
-          </div>
+          {showLocalOption && (
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant={sourceType === "github" ? "default" : "outline"}
+                onClick={() => setSourceType("github")}
+              >
+                GitHub Repo URL
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant={sourceType === "local" ? "default" : "outline"}
+                onClick={() => setSourceType("local")}
+              >
+                Local Directory Path
+              </Button>
+            </div>
+          )}
 
-          {sourceType === "github" ? (
+          {sourceType === "github" || !showLocalOption ? (
             <div className="space-y-1.5">
               <label className="text-xs font-medium text-slate-300" htmlFor="repo-url-input">
                 Public GitHub Repository URL
@@ -124,8 +127,11 @@ export function IndexRepoModal({
                 value={repoUrl}
                 onChange={(e) => setRepoUrl(e.target.value)}
                 className="w-full rounded-md border border-input bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:ring-2 focus:ring-ring"
-                placeholder="https://github.com/owner/repository"
+                placeholder="https://github.com/Koe10121/archradar"
               />
+              <p className="text-[11px] text-muted-foreground">
+                Supports TypeScript, JavaScript, Python, Go, Rust, and Java repositories.
+              </p>
             </div>
           ) : (
             <div className="space-y-1.5">

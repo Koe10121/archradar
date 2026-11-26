@@ -2,7 +2,10 @@
 
 import asyncio
 import logging
+import os
+import ssl
 from collections.abc import AsyncIterator
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
@@ -11,15 +14,64 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.pool import NullPool
 
 logger = logging.getLogger(__name__)
+
+_ASYNCPG_UNSUPPORTED_PARAMS = frozenset({"sslmode", "channel_binding"})
+
+
+def sanitize_asyncpg_url(database_url: str) -> tuple[str, dict[str, object]]:
+    """Strip libpq-only query params (sslmode, channel_binding) into asyncpg connect_args."""
+    if not database_url.startswith("postgresql+asyncpg://"):
+        return database_url, {}
+
+    parsed = urlsplit(database_url)
+    if not parsed.query:
+        return database_url, {}
+
+    raw_params = parse_qsl(parsed.query, keep_blank_values=True)
+    kept_params: list[tuple[str, str]] = []
+    connect_args: dict[str, object] = {}
+
+    for key, val in raw_params:
+        lower_key = key.lower()
+        if lower_key == "sslmode":
+            mode = val.lower().strip()
+            if mode == "disable":
+                connect_args["ssl"] = False
+            elif mode in {"require", "prefer", "allow", "verify-ca", "verify-full"}:
+                connect_args["ssl"] = ssl.create_default_context()
+            continue
+        if lower_key in _ASYNCPG_UNSUPPORTED_PARAMS:
+            continue
+        kept_params.append((key, val))
+
+    clean_url = urlunsplit(
+        (parsed.scheme, parsed.netloc, parsed.path, urlencode(kept_params), parsed.fragment)
+    )
+    return clean_url, connect_args
 
 
 def create_db_engine(database_url: str) -> AsyncEngine:
     """Create an async SQLAlchemy engine appropriate for the given URL."""
     if database_url.startswith("sqlite"):
         return create_async_engine(database_url, echo=False)
-    return create_async_engine(database_url, echo=False, pool_pre_ping=True)
+
+    clean_url, connect_args = sanitize_asyncpg_url(database_url)
+    if os.environ.get("VERCEL") == "1":
+        return create_async_engine(
+            clean_url,
+            echo=False,
+            poolclass=NullPool,
+            connect_args=connect_args,
+        )
+    return create_async_engine(
+        clean_url,
+        echo=False,
+        pool_pre_ping=True,
+        connect_args=connect_args,
+    )
 
 
 def create_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:

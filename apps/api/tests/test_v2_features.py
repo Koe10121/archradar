@@ -3,6 +3,7 @@
 import hashlib
 import hmac
 import json
+import ssl
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -11,7 +12,7 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.core.config import Settings
-from app.db.session import create_session_factory
+from app.db.session import create_session_factory, sanitize_asyncpg_url
 from app.main import create_app
 from app.schemas.analysis import (
     BlastRadiusReport,
@@ -340,3 +341,52 @@ async def test_pr_comment_endpoint_and_webhook_dry_run_preview(
         pending_data = pending_resp.json()
         assert pending_data["comment_posted"] is False
         assert "Dry-Run Pending" in pending_data["comment_preview"]
+
+
+def test_sanitize_asyncpg_url_strips_libpq_ssl_params() -> None:
+    """Neon/libpq sslmode & channel_binding params convert cleanly for asyncpg."""
+    clean_url, connect_args = sanitize_asyncpg_url(
+        "postgresql+asyncpg://user:pass@ep-cool.neon.tech/neondb"
+        "?sslmode=require&channel_binding=require&application_name=archradar"
+    )
+    assert clean_url == (
+        "postgresql+asyncpg://user:pass@ep-cool.neon.tech/neondb?application_name=archradar"
+    )
+    assert isinstance(connect_args["ssl"], ssl.SSLContext)
+
+    disabled_url, disabled_args = sanitize_asyncpg_url(
+        "postgresql+asyncpg://user:pass@localhost:5432/db?sslmode=disable"
+    )
+    assert disabled_url == "postgresql+asyncpg://user:pass@localhost:5432/db"
+    assert disabled_args == {"ssl": False}
+
+
+async def test_cloud_production_blocks_local_path_and_lazy_bootstraps(
+    tmp_path: Path,
+) -> None:
+    """Production mode rejects local_path indexing (403) and lazily initializes SQLite tables."""
+    db_file = tmp_path / "serverless_boot.db"
+    settings = Settings(
+        environment="production",
+        log_level="WARNING",
+        database_url=f"sqlite+aiosqlite:///{db_file.as_posix()}",
+        auto_init_db=True,
+        seed_demo_on_startup=True,
+    )
+    app = create_app(settings=settings)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        # Without running lifespan explicitly, middleware lazily creates tables & seeds demo repos
+        health_resp = await client.get("/api/health")
+        assert health_resp.status_code == 200
+        assert health_resp.json()["database"] == "connected"
+
+        repos_resp = await client.get("/api/repos")
+        assert repos_resp.status_code == 200
+        assert len(repos_resp.json()) == 2
+
+        local_resp = await client.post(
+            "/api/repos/index",
+            json={"local_path": str(tmp_path)},
+        )
+        assert local_resp.status_code == 403
