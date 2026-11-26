@@ -7,17 +7,23 @@ dependencies = [
   "alembic>=1.14.0",
   "asyncpg>=0.30.0",
   "fastapi>=0.115.0",
+  "google-genai>=1.0.0",
+  "httpx>=0.28.0",
   "pydantic>=2.10.0",
   "pydantic-settings>=2.6.0",
   "redis>=5.2.0",
   "sqlalchemy[asyncio]>=2.0.36",
+  "tree-sitter>=0.23.0",
+  "tree-sitter-javascript>=0.23.0",
+  "tree-sitter-python>=0.23.0",
+  "tree-sitter-typescript>=0.23.0",
+  "unidiff>=0.7.5",
   "uvicorn[standard]>=0.32.0",
 ]
 
 [dependency-groups]
 dev = [
   "aiosqlite>=0.20.0",
-  "httpx>=0.28.0",
   "mypy>=1.13.0",
   "pytest>=8.3.0",
   "pytest-asyncio>=0.24.0",
@@ -37,6 +43,16 @@ python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
 exclude = ["alembic/versions"]
+
+[[tool.mypy.overrides]]
+module = [
+  "tree_sitter_javascript.*",
+  "tree_sitter_python.*",
+  "tree_sitter_typescript.*",
+  "unidiff.*",
+  "google.*",
+]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

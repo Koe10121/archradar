@@ -7,15 +7,20 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from app.api.routes.analyses import router as analyses_router
 from app.api.routes.health import router as health_router
+from app.api.routes.repos import router as repos_router
+from app.api.routes.webhooks import router as webhooks_router
 from app.core.config import Settings, get_settings
 from app.core.logging import CorrelationIdMiddleware, configure_logging
 from app.db.session import create_db_engine
+from app.services.ai_analyzer import LLMProvider
 
 
 def create_app(
     settings: Settings | None = None,
     db_engine: AsyncEngine | None = None,
+    llm_provider: LLMProvider | None = None,
 ) -> FastAPI:
     """Create and configure a FastAPI application instance."""
     resolved_settings = settings or get_settings()
@@ -37,6 +42,7 @@ def create_app(
     )
     application.state.settings = resolved_settings
     application.state.db_engine = resolved_engine
+    application.state.llm_provider = llm_provider
 
     application.add_middleware(CorrelationIdMiddleware)
     application.add_middleware(
@@ -47,6 +53,9 @@ def create_app(
         allow_headers=["*"],
     )
     application.include_router(health_router)
+    application.include_router(repos_router)
+    application.include_router(analyses_router)
+    application.include_router(webhooks_router)
     return application
 
 

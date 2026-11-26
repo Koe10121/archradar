@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000"
 
     gemini_api_key: str = ""
+    gemini_model: str = "gemini-2.5-flash"
+    github_token: str = ""
     github_webhook_secret: str = ""
     github_app_private_key: str = ""
 
