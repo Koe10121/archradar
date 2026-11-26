@@ -487,7 +487,7 @@ export function ArchRadarWorkspace({
                 </strong>
               </span>
             ) : (
-              <span className="text-slate-400">API offline (Demo Mode ready)</span>
+              <span className="text-emerald-300/90">Interactive Demo Mode</span>
             )}
           </div>
 

@@ -31,6 +31,16 @@ export type HealthCheckResult =
 
 export type ApiResult<T> = { ok: true; data: T } | { ok: false; error: string };
 
+export function isApiConfigured(isServer: boolean): boolean {
+  if (process.env.NODE_ENV !== "production") {
+    return true;
+  }
+  if (isServer) {
+    return Boolean(process.env.API_INTERNAL_URL || process.env.NEXT_PUBLIC_API_URL);
+  }
+  return Boolean(process.env.NEXT_PUBLIC_API_URL);
+}
+
 export function getApiBaseUrl(isServer: boolean): string {
   if (isServer) {
     return (
@@ -52,12 +62,17 @@ async function requestJson<T>(
   }
 ): Promise<ApiResult<T>> {
   const isServer = options?.isServer ?? false;
+  if (!isApiConfigured(isServer)) {
+    return { ok: false, error: "Standalone Demo Mode (no backend API URL configured)." };
+  }
+
   const baseUrl = getApiBaseUrl(isServer).replace(/\/+$/, "");
 
   try {
     const response = await fetch(`${baseUrl}${path}`, {
       method: options?.method ?? "GET",
       cache: "no-store",
+      signal: AbortSignal.timeout(4000),
       headers: {
         Accept: "application/json",
         ...(options?.body ? { "Content-Type": "application/json" } : {}),

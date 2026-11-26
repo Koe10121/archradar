@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend:
+    name: Backend (ruff, mypy, pytest, evals)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install Python 3.12
+        run: uv python install 3.12
+
+      - name: Install backend dependencies
+        working-directory: apps/api
+        run: uv sync
+
+      - name: Run ruff lint
+        working-directory: apps/api
+        run: uv run ruff check . ../../evals/run_benchmark.py ../../evals/__init__.py
+
+      - name: Run mypy typecheck
+        working-directory: apps/api
+        run: uv run mypy app
+
+      - name: Run pytest suite
+        working-directory: apps/api
+        run: uv run pytest -v
+
+      - name: Run 35-case evaluation benchmark (simulated)
+        run: uv run --project apps/api python -m evals.run_benchmark --mode simulated --output /tmp/eval_report.md
+
+  frontend:
+    name: Frontend (vitest, lint, tsc, build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: apps/web
+        run: npm ci
+
+      - name: Run Vitest unit tests
+        working-directory: apps/web
+        run: npm test
+
+      - name: Run ESLint
+        working-directory: apps/web
+        run: npm run lint
+
+      - name: Run TypeScript typecheck
+        working-directory: apps/web
+        run: npx tsc --noEmit
+
+      - name: Run Next.js production build
+        working-directory: apps/web
+        run: npm run build
