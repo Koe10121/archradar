@@ -1,0 +1,17 @@
+{
+  "id": "case_006_py_internal_cleanup",
+  "category": "benign_low_risk",
+  "title": "Simplify local variable in slugify_label",
+  "description": "Internal expression simplification with identical public signature and behavior.",
+  "repo_fixture": "fixtures/mini_fastapi_py",
+  "doc_files": ["README.md"],
+  "diff": "diff --git a/app/utils/text.py b/app/utils/text.py\nindex 1111111..2222222 100644\n--- a/app/utils/text.py\n+++ b/app/utils/text.py\n@@ -3,5 +3,5 @@\n \n def slugify_label(raw: str) -> str:\n     \"\"\"Return a clean lowercase hyphenated label.\"\"\"\n-    cleaned = raw.strip().lower()\n-    return cleaned.replace(\" \", \"-\")\n+    normalized = raw.strip().lower()\n+    return normalized.replace(\" \", \"-\")\n",
+  "expected": {
+    "min_risk": "low",
+    "max_risk": "low",
+    "breaking_change_detected": false,
+    "must_include_affected_files": ["app/utils/text.py"],
+    "doc_drift_expected": false
+  },
+  "adversarial_phantom_probe": []
+}

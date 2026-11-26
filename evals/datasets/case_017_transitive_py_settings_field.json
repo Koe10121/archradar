@@ -1,0 +1,22 @@
+{
+  "id": "case_017_transitive_py_settings_field",
+  "category": "transitive_break",
+  "title": "Rename Settings.webhook_secret to hmac_secret",
+  "description": "2-hop Python break propagating from config.py through security.py to orders.py and shipping.py.",
+  "repo_fixture": "fixtures/mini_fastapi_py",
+  "doc_files": ["README.md", "docs/ARCHITECTURE.md"],
+  "diff": "diff --git a/app/core/config.py b/app/core/config.py\nindex 1111111..2222222 100644\n--- a/app/core/config.py\n+++ b/app/core/config.py\n@@ -5,7 +5,7 @@ from dataclasses import dataclass\n \n @dataclass(frozen=True)\n class Settings:\n-    webhook_secret: str = \"whsec_demo\"\n+    hmac_secret: str = \"whsec_demo\"\n     redis_url: str = \"redis://localhost:6379/0\"\n \n \n",
+  "expected": {
+    "min_risk": "medium",
+    "max_risk": "critical",
+    "breaking_change_detected": true,
+    "must_include_affected_files": [
+      "app/core/config.py",
+      "app/core/security.py",
+      "app/api/webhooks/shipping.py",
+      "app/api/routes/orders.py"
+    ],
+    "doc_drift_expected": false
+  },
+  "adversarial_phantom_probe": []
+}

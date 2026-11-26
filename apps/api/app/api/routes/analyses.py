@@ -226,6 +226,78 @@ async def analyze_pull_request(
     )
 
 
+@router.get("/repos/{repo_id}/analyses", response_model=list[PRAnalysisResponse])
+async def list_repository_analyses(
+    repo_id: UUID,
+    request: Request,
+) -> list[PRAnalysisResponse]:
+    """List persisted PR blast-radius analyses for a repository, newest first."""
+    engine = cast(AsyncEngine, request.app.state.db_engine)
+    session_factory = create_session_factory(engine)
+
+    async with session_factory() as session:
+        repo_result = await session.execute(select(Repository).where(Repository.id == repo_id))
+        if repo_result.scalar_one_or_none() is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Repository not found",
+            )
+
+        records_result = await session.execute(
+            select(PRAnalysis)
+            .where(PRAnalysis.repository_id == repo_id)
+            .order_by(desc(PRAnalysis.created_at))
+        )
+        records = list(records_result.scalars().all())
+        if not records:
+            return []
+
+        snapshot_ids = {record.snapshot_id for record in records}
+        paths_by_snapshot: dict[UUID, set[str]] = {sid: set() for sid in snapshot_ids}
+        nodes_result = await session.execute(
+            select(FileNode.snapshot_id, FileNode.path).where(
+                FileNode.snapshot_id.in_(snapshot_ids)
+            )
+        )
+        for snapshot_id, path in nodes_result.all():
+            paths_by_snapshot.setdefault(snapshot_id, set()).add(path)
+
+    responses: list[PRAnalysisResponse] = []
+    for record in records:
+        blast_radius = BlastRadiusResult.model_validate(record.blast_radius_json)
+        ai_report = (
+            BlastRadiusReport.model_validate(record.ai_report_json)
+            if record.ai_report_json is not None
+            else None
+        )
+        valid_paths = paths_by_snapshot.get(record.snapshot_id, set())
+        telemetry = (
+            validate_report_citations(ai_report, valid_paths)[1]
+            if ai_report is not None
+            else None
+        )
+        responses.append(
+            PRAnalysisResponse(
+                id=record.id,
+                repository_id=record.repository_id,
+                snapshot_id=record.snapshot_id,
+                pr_number=record.pr_number,
+                pr_title=record.pr_title,
+                changed_files=list(record.changed_files),
+                blast_radius=blast_radius,
+                ai_report=ai_report,
+                citation_telemetry=telemetry,
+                model_used=record.model_used,
+                prompt_tokens=record.prompt_tokens,
+                completion_tokens=record.completion_tokens,
+                estimated_cost_usd=float(record.estimated_cost_usd),
+                latency_ms=record.latency_ms,
+                created_at=record.created_at,
+            )
+        )
+    return responses
+
+
 @router.get("/analyses/{analysis_id}", response_model=PRAnalysisResponse)
 async def get_analysis(analysis_id: UUID, request: Request) -> PRAnalysisResponse:
     """Retrieve a persisted PR blast-radius and AI analysis report by ID."""

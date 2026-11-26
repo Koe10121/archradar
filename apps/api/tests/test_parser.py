@@ -137,3 +137,29 @@ class AuthRouter:
 
     assert "app/models/user.py" in resolved
     assert "app/services/auth.py" in resolved
+
+
+def test_typescript_nested_imports_inside_exported_functions() -> None:
+    """TypeScriptAdapter visits require() and import() inside exported function bodies."""
+    adapter = TypeScriptAdapter()
+    known_files = {
+        "src/dynamic/loader.ts",
+        "src/dynamic/plugin.ts",
+        "src/dynamic/legacy.js",
+    }
+    source = """
+    export async function loadPlugin(flag: boolean): Promise<unknown> {
+      const staticMod = await import('./plugin');
+      const legacyMod = require('./legacy');
+      return flag ? staticMod : legacyMod;
+    }
+    """
+
+    parsed = adapter.parse("src/dynamic/loader.ts", source)
+    resolved = [
+        target
+        for imp in parsed.imports
+        for target in adapter.resolve_import("src/dynamic/loader.ts", imp, known_files)
+    ]
+    assert "src/dynamic/plugin.ts" in resolved
+    assert "src/dynamic/legacy.js" in resolved

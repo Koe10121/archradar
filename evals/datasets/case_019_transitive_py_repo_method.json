@@ -1,0 +1,24 @@
+{
+  "id": "case_019_transitive_py_repo_method",
+  "category": "transitive_break",
+  "title": "Rename OrderRepository.save_order to persist_order",
+  "description": "3-hop break through app/db/__init__.py barrel to inventory, fulfillment, orders, shipping, and notify_worker.",
+  "repo_fixture": "fixtures/mini_fastapi_py",
+  "doc_files": ["README.md"],
+  "diff": "diff --git a/app/db/repository.py b/app/db/repository.py\nindex 1111111..2222222 100644\n--- a/app/db/repository.py\n+++ b/app/db/repository.py\n@@ -4,7 +4,7 @@ from .models import OrderRecord\n \n \n class OrderRepository:\n-    def save_order(self, record: OrderRecord) -> str:\n+    def persist_order(self, record: OrderRecord) -> str:\n         return record.order_id\n \n     def get_order(self, order_id: str) -> OrderRecord:\n",
+  "expected": {
+    "min_risk": "high",
+    "max_risk": "critical",
+    "breaking_change_detected": true,
+    "must_include_affected_files": [
+      "app/db/repository.py",
+      "app/db/__init__.py",
+      "app/services/inventory.py",
+      "app/services/fulfillment.py",
+      "app/api/routes/orders.py",
+      "app/api/webhooks/shipping.py"
+    ],
+    "doc_drift_expected": false
+  },
+  "adversarial_phantom_probe": []
+}

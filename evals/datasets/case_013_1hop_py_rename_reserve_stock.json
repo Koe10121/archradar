@@ -1,0 +1,20 @@
+{
+  "id": "case_013_1hop_py_rename_reserve_stock",
+  "category": "direct_1hop_break",
+  "title": "Rename reserve_stock to allocate_stock",
+  "description": "Exported function rename in inventory.py breaks fulfillment.py and upstream routes.",
+  "repo_fixture": "fixtures/mini_fastapi_py",
+  "doc_files": ["README.md"],
+  "diff": "diff --git a/app/services/inventory.py b/app/services/inventory.py\nindex 1111111..2222222 100644\n--- a/app/services/inventory.py\n+++ b/app/services/inventory.py\n@@ -4,7 +4,7 @@ from app.db import OrderRepository\n from app.db.models import OrderRecord\n \n \n-def reserve_stock(order_id: str, sku: str) -> bool:\n+def allocate_stock(order_id: str, sku: str) -> bool:\n     repo = OrderRepository()\n     repo.save_order(OrderRecord(order_id=order_id, sku=sku))\n     return True\n",
+  "expected": {
+    "min_risk": "medium",
+    "max_risk": "critical",
+    "breaking_change_detected": true,
+    "must_include_affected_files": [
+      "app/services/inventory.py",
+      "app/services/fulfillment.py"
+    ],
+    "doc_drift_expected": false
+  },
+  "adversarial_phantom_probe": []
+}

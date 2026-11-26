@@ -1,0 +1,17 @@
+{
+  "id": "case_021_doc_drift_new_refund_route",
+  "category": "doc_drift",
+  "title": "Add postRefund handler without updating docs/ARCHITECTURE.md",
+  "description": "Adds a new /api/refund endpoint handler in checkout.ts while docs/ARCHITECTURE.md only documents /api/checkout.",
+  "repo_fixture": "fixtures/mini_saas_ts",
+  "doc_files": ["README.md", "docs/ARCHITECTURE.md"],
+  "diff": "diff --git a/src/api/routes/checkout.ts b/src/api/routes/checkout.ts\nindex 1111111..2222222 100644\n--- a/src/api/routes/checkout.ts\n+++ b/src/api/routes/checkout.ts\n@@ -5,4 +5,9 @@ export function postCheckout(headers: Record<string, string>, planId: string): s\n   const ctx = requireAuth(headers);\n   const invoice = chargeSubscription(ctx, planId);\n   return invoice.invoiceId;\n }\n+\n+export function postRefund(headers: Record<string, string>, invoiceId: string): string {\n+  const ctx = requireAuth(headers);\n+  return `refund_${ctx.userId}_${invoiceId}`;\n+}\n",
+  "expected": {
+    "min_risk": "low",
+    "max_risk": "high",
+    "breaking_change_detected": false,
+    "must_include_affected_files": ["src/api/routes/checkout.ts"],
+    "doc_drift_expected": true
+  },
+  "adversarial_phantom_probe": []
+}

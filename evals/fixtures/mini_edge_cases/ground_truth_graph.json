@@ -1,0 +1,15 @@
+{
+  "edges": [
+    ["src/cycle/alpha.ts", "src/cycle/beta.ts"],
+    ["src/cycle/beta.ts", "src/cycle/alpha.ts"],
+    ["src/cycle/consumer.ts", "src/cycle/alpha.ts"],
+    ["src/barrel/sub/index.ts", "src/barrel/leaf.ts"],
+    ["src/barrel/index.ts", "src/barrel/sub/index.ts"],
+    ["src/barrel/caller.ts", "src/barrel/index.ts"],
+    ["src/dynamic/loader.ts", "src/dynamic/plugin.ts"],
+    ["src/dynamic/loader.ts", "src/dynamic/legacy.js"],
+    ["pkg/node_a.py", "pkg/node_b.py"],
+    ["pkg/node_b.py", "pkg/node_a.py"],
+    ["pkg/runner.py", "pkg/node_a.py"]
+  ]
+}

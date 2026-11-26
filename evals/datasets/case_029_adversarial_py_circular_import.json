@@ -1,0 +1,21 @@
+{
+  "id": "case_029_adversarial_py_circular_import",
+  "category": "adversarial_edge",
+  "title": "Breaking signature change inside Python circular import cycle",
+  "description": "Verifies Python reverse BFS handles node_a.py <-> node_b.py cycle and captures pkg/runner.py.",
+  "repo_fixture": "fixtures/mini_edge_cases",
+  "doc_files": ["README.md"],
+  "diff": "diff --git a/pkg/node_a.py b/pkg/node_a.py\nindex 1111111..2222222 100644\n--- a/pkg/node_a.py\n+++ b/pkg/node_a.py\n@@ -3,7 +3,7 @@\n from .node_b import ping_b\n \n \n-def ping_a(limit: int) -> str:\n+def ping_a(limit: int, mode: str) -> str:\n     if limit <= 0:\n         return \"a\"\n     return ping_b(limit - 1)\n",
+  "expected": {
+    "min_risk": "medium",
+    "max_risk": "critical",
+    "breaking_change_detected": true,
+    "must_include_affected_files": [
+      "pkg/node_a.py",
+      "pkg/node_b.py",
+      "pkg/runner.py"
+    ],
+    "doc_drift_expected": false
+  },
+  "adversarial_phantom_probe": []
+}

@@ -1,0 +1,17 @@
+{
+  "id": "case_004_isolated_test_edit",
+  "category": "benign_low_risk",
+  "title": "Update isolated smoke test assertion",
+  "description": "Test-only change in src/tests/smoke.test.ts with no production dependents.",
+  "repo_fixture": "fixtures/mini_edge_cases",
+  "doc_files": ["README.md"],
+  "diff": "diff --git a/src/tests/smoke.test.ts b/src/tests/smoke.test.ts\nindex 1111111..2222222 100644\n--- a/src/tests/smoke.test.ts\n+++ b/src/tests/smoke.test.ts\n@@ -1,4 +1,5 @@\n export function runSmokeAssertions(): boolean {\n-  const expected = 2 + 2;\n+  // Verify basic arithmetic invariant\n+  const expected = 2 + 2;\n   return expected === 4;\n }\n",
+  "expected": {
+    "min_risk": "low",
+    "max_risk": "low",
+    "breaking_change_detected": false,
+    "must_include_affected_files": ["src/tests/smoke.test.ts"],
+    "doc_drift_expected": false
+  },
+  "adversarial_phantom_probe": []
+}

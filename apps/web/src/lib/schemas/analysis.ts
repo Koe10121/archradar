@@ -74,6 +74,8 @@ export const PRAnalysisResponseSchema = z.object({
   created_at: z.string(),
 });
 
+export const PRAnalysisListSchema = z.array(PRAnalysisResponseSchema);
+
 export type RiskLevel = z.infer<typeof RiskLevelSchema>;
 export type ImpactedFlow = z.infer<typeof ImpactedFlowSchema>;
 export type DocDriftAlert = z.infer<typeof DocDriftAlertSchema>;

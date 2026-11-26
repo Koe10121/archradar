@@ -1,0 +1,21 @@
+{
+  "id": "case_010_1hop_audit_required_param",
+  "category": "direct_1hop_break",
+  "title": "Require correlationId in recordSecurityEvent",
+  "description": "Adding a required third argument to recordSecurityEvent breaks billing.ts and stripe.ts.",
+  "repo_fixture": "fixtures/mini_saas_ts",
+  "doc_files": ["README.md"],
+  "diff": "diff --git a/src/services/audit.ts b/src/services/audit.ts\nindex 1111111..2222222 100644\n--- a/src/services/audit.ts\n+++ b/src/services/audit.ts\n@@ -1,5 +1,5 @@\n-export function recordSecurityEvent(eventName: string, actorId: string): void {\n-  if (!eventName || !actorId) {\n+export function recordSecurityEvent(eventName: string, actorId: string, correlationId: string): void {\n+  if (!eventName || !actorId || !correlationId) {\n     throw new Error(\"Invalid audit event\");\n   }\n }\n",
+  "expected": {
+    "min_risk": "medium",
+    "max_risk": "critical",
+    "breaking_change_detected": true,
+    "must_include_affected_files": [
+      "src/services/audit.ts",
+      "src/services/billing.ts",
+      "src/api/webhooks/stripe.ts"
+    ],
+    "doc_drift_expected": false
+  },
+  "adversarial_phantom_probe": []
+}

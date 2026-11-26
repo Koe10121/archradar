@@ -6,8 +6,7 @@ import { GitPullRequest, Loader2, Sparkles, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { analyzePullRequest } from "@/lib/api";
 import {
-  DEMO_PR_SCENARIOS,
-  DEMO_REPO_ID,
+  SAMPLE_DIFFS_BY_REPO_ID,
   SAMPLE_UNIFIED_DIFF,
 } from "@/lib/demo-data";
 import { type BlastRadiusResult, type PRAnalysisResponse } from "@/lib/schemas/analysis";
@@ -17,6 +16,8 @@ interface AnalyzePRModalProps {
   open: boolean;
   repoId: string;
   repoLabel: string;
+  isOfflineDemo: boolean;
+  demoScenarios: PRAnalysisResponse[];
   graph: GraphResponse;
   onClose: () => void;
   onAnalyzed: (analysis: PRAnalysisResponse) => void;
@@ -112,17 +113,25 @@ export function AnalyzePRModal({
   open,
   repoId,
   repoLabel,
+  isOfflineDemo,
+  demoScenarios,
   graph,
   onClose,
   onAnalyzed,
 }: AnalyzePRModalProps): React.JSX.Element | null {
+  const sampleDiffForRepo = SAMPLE_DIFFS_BY_REPO_ID[repoId] ?? SAMPLE_UNIFIED_DIFF;
+
   const [mode, setMode] = useState<"diff" | "url">("diff");
   const [prTitle, setPrTitle] = useState("Enforce strict audience claim in verifyToken");
   const [prUrl, setPrUrl] = useState("");
-  const [rawDiff, setRawDiff] = useState(SAMPLE_UNIFIED_DIFF);
+  const [rawDiff, setRawDiff] = useState(sampleDiffForRepo);
   const [runAi, setRunAi] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setRawDiff(SAMPLE_DIFFS_BY_REPO_ID[repoId] ?? SAMPLE_UNIFIED_DIFF);
+  }, [repoId]);
 
   useEffect(() => {
     if (!open) return;
@@ -135,17 +144,15 @@ export function AnalyzePRModal({
 
   if (!open) return null;
 
-  const isDemoRepo = repoId === DEMO_REPO_ID;
-
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>): Promise<void> {
     e.preventDefault();
     setError(null);
 
-    if (isDemoRepo && mode === "diff") {
-      if (rawDiff.trim() === SAMPLE_UNIFIED_DIFF.trim()) {
-        const scenario42 = DEMO_PR_SCENARIOS[0];
-        if (scenario42) {
-          onAnalyzed(scenario42);
+    if (isOfflineDemo && mode === "diff") {
+      if (rawDiff.trim() === sampleDiffForRepo.trim() && demoScenarios.length > 0) {
+        const primary = demoScenarios[0];
+        if (primary) {
+          onAnalyzed(primary);
           onClose();
           return;
         }
@@ -190,13 +197,15 @@ export function AnalyzePRModal({
         </div>
 
         <form onSubmit={(e) => void handleSubmit(e)} className="space-y-4 p-5 text-sm">
-          {isDemoRepo && (
+          {demoScenarios.length > 0 && (
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs">
               <span className="text-amber-200">
-                Demo Mode active: launch a pre-computed scenario or test any unified diff.
+                {isOfflineDemo
+                  ? "Offline Demo Mode active: launch a pre-computed scenario or test any unified diff."
+                  : "Pre-computed demo scenarios available, or run a live diff/PR analysis below."}
               </span>
               <div className="flex gap-1.5">
-                {DEMO_PR_SCENARIOS.map((scenario) => (
+                {demoScenarios.map((scenario) => (
                   <Button
                     key={scenario.id}
                     type="button"
@@ -229,10 +238,10 @@ export function AnalyzePRModal({
               type="button"
               size="sm"
               variant={mode === "url" ? "default" : "outline"}
-              disabled={isDemoRepo}
+              disabled={isOfflineDemo}
               onClick={() => setMode("url")}
             >
-              GitHub PR URL {isDemoRepo ? "(index a real repo first)" : ""}
+              GitHub PR URL {isOfflineDemo ? "(connect API or index a repo first)" : ""}
             </Button>
           </div>
 
@@ -257,7 +266,7 @@ export function AnalyzePRModal({
                 </label>
                 <button
                   type="button"
-                  onClick={() => setRawDiff(SAMPLE_UNIFIED_DIFF)}
+                  onClick={() => setRawDiff(sampleDiffForRepo)}
                   className="text-xs text-amber-400 hover:underline"
                 >
                   Load sample diff
@@ -287,7 +296,7 @@ export function AnalyzePRModal({
             </div>
           )}
 
-          {!isDemoRepo && (
+          {!isOfflineDemo && (
             <label className="flex items-center gap-2 text-xs text-slate-300">
               <input
                 type="checkbox"

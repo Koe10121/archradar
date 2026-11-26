@@ -1,0 +1,23 @@
+{
+  "id": "case_016_transitive_auth_context_shape",
+  "category": "transitive_break",
+  "title": "Rename AuthContext.userId to subjectId in requireAuth",
+  "description": "2-hop transitive break affecting billing.ts, checkout.ts, stripe.ts, and invoiceWorker.ts.",
+  "repo_fixture": "fixtures/mini_saas_ts",
+  "doc_files": ["README.md", "docs/ARCHITECTURE.md"],
+  "diff": "diff --git a/src/middleware/auth.ts b/src/middleware/auth.ts\nindex 1111111..2222222 100644\n--- a/src/middleware/auth.ts\n+++ b/src/middleware/auth.ts\n@@ -1,12 +1,12 @@\n import { verifyToken } from \"@/lib/token\";\n \n export interface AuthContext {\n-  userId: string;\n+  subjectId: string;\n   tier: string;\n }\n \n export function requireAuth(headers: Record<string, string>): AuthContext {\n   const header = headers[\"authorization\"] ?? headers[\"Authorization\"] ?? \"\";\n   const token = header.replace(\"Bearer \", \"\").trim();\n   const claims = verifyToken(token);\n-  return { userId: claims.sub, tier: claims.tier };\n+  return { subjectId: claims.sub, tier: claims.tier };\n }\n",
+  "expected": {
+    "min_risk": "high",
+    "max_risk": "critical",
+    "breaking_change_detected": true,
+    "must_include_affected_files": [
+      "src/middleware/auth.ts",
+      "src/services/billing.ts",
+      "src/api/routes/checkout.ts",
+      "src/api/webhooks/stripe.ts",
+      "src/workers/invoiceWorker.ts"
+    ],
+    "doc_drift_expected": false
+  },
+  "adversarial_phantom_probe": []
+}

@@ -38,13 +38,13 @@ Work through these phases sequentially. Check off items only after running verif
 - [x] Build "Analyze a PR" modal (supports GitHub PR URL or pasting a sample diff) + "Index New Repo" flow with live progress status.
 
 ## Phase 4: Evaluation Suite & Zero-Friction Demo Mode
-- [ ] Seed 2 rich pre-indexed demo repositories + 3 realistic pre-computed PR scenarios (e.g., Safe Refactor, Subtle Webhook Breakage, High-Risk Auth Middleware Change).
-- [ ] Build the 30-case benchmark suite in `evals/` (see `docs/EVALUATION_SUITE.md`).
-- [ ] Run benchmark, record precision/recall/citation-accuracy/latency/cost metrics, and save `evals/results/latest_report.md`.
+- [x] Seed 2 rich pre-indexed demo repositories + 3 realistic pre-computed PR scenarios (e.g., Safe Refactor, Subtle Webhook Breakage, High-Risk Auth Middleware Change).
+- [x] Build the 30-case benchmark suite in `evals/` (see `docs/EVALUATION_SUITE.md`).
+- [x] Run benchmark, record precision/recall/citation-accuracy/latency/cost metrics, and save `evals/results/latest_report.md`.
 
 ## Phase 5: Portfolio Polish & Deployment
-- [ ] Deploy frontend (Vercel) + backend & Postgres (Render / Railway / Fly.io).
-- [ ] Write a standout root `README.md` featuring:
+- [ ] Deploy frontend (Vercel) + backend & Postgres (Render / Railway / Fly.io) *(deployment configs ready: `render.yaml`, `apps/api/fly.toml`, `apps/web/vercel.json`; live cloud deploy requires user cloud account credentials)*.
+- [x] Write a standout root `README.md` featuring:
   - 60-second demo GIF/video right at the top
   - Live demo URL
   - System architecture diagram

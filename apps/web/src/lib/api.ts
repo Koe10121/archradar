@@ -1,6 +1,7 @@
 import { type z } from "zod";
 
 import {
+  PRAnalysisListSchema,
   PRAnalysisResponseSchema,
   type PRAnalysisResponse,
 } from "@/lib/schemas/analysis";
@@ -116,6 +117,17 @@ export async function fetchRepositoryGraph(
   return requestJson(
     `/api/repos/${encodeURIComponent(repoId)}/graph`,
     GraphResponseSchema,
+    { isServer: options?.isServer }
+  );
+}
+
+export async function fetchRepositoryAnalyses(
+  repoId: string,
+  options?: { isServer?: boolean }
+): Promise<ApiResult<PRAnalysisResponse[]>> {
+  return requestJson(
+    `/api/repos/${encodeURIComponent(repoId)}/analyses`,
+    PRAnalysisListSchema,
     { isServer: options?.isServer }
   );
 }

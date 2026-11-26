@@ -1,0 +1,25 @@
+{
+  "id": "case_018_transitive_py_order_model_sku",
+  "category": "transitive_break",
+  "title": "Rename OrderRecord.sku attribute to product_sku",
+  "description": "3-hop Python domain model rename affecting repository, inventory, fulfillment, orders, shipping, and notify_worker.",
+  "repo_fixture": "fixtures/mini_fastapi_py",
+  "doc_files": ["README.md", "docs/ARCHITECTURE.md"],
+  "diff": "diff --git a/app/db/models.py b/app/db/models.py\nindex 1111111..2222222 100644\n--- a/app/db/models.py\n+++ b/app/db/models.py\n@@ -5,5 +5,5 @@ from dataclasses import dataclass\n @dataclass\n class OrderRecord:\n     order_id: str\n-    sku: str\n+    product_sku: str\n     status: str = \"pending\"\n",
+  "expected": {
+    "min_risk": "high",
+    "max_risk": "critical",
+    "breaking_change_detected": true,
+    "must_include_affected_files": [
+      "app/db/models.py",
+      "app/db/repository.py",
+      "app/services/inventory.py",
+      "app/services/fulfillment.py",
+      "app/workers/notify_worker.py",
+      "app/api/routes/orders.py",
+      "app/api/webhooks/shipping.py"
+    ],
+    "doc_drift_expected": false
+  },
+  "adversarial_phantom_probe": []
+}

@@ -1,0 +1,21 @@
+{
+  "id": "case_011_1hop_billing_return_shape",
+  "category": "direct_1hop_break",
+  "title": "Rename invoiceId field to id in chargeSubscription return object",
+  "description": "Breaking return object key rename affecting checkout.ts and invoiceWorker.ts.",
+  "repo_fixture": "fixtures/mini_saas_ts",
+  "doc_files": ["README.md", "docs/ARCHITECTURE.md"],
+  "diff": "diff --git a/src/services/billing.ts b/src/services/billing.ts\nindex 1111111..2222222 100644\n--- a/src/services/billing.ts\n+++ b/src/services/billing.ts\n@@ -2,11 +2,11 @@ import { requireAuth, type AuthContext } from \"@/middleware/auth\";\n import { recordSecurityEvent } from \"./audit\";\n \n export interface InvoiceResult {\n-  invoiceId: string;\n+  id: string;\n   amountCents: number;\n }\n \n export function chargeSubscription(ctx: AuthContext, planId: string): InvoiceResult {\n   recordSecurityEvent(\"billing.charge\", ctx.userId);\n-  return { invoiceId: `inv_${planId}`, amountCents: 4900 };\n+  return { id: `inv_${planId}`, amountCents: 4900 };\n }\n",
+  "expected": {
+    "min_risk": "high",
+    "max_risk": "critical",
+    "breaking_change_detected": true,
+    "must_include_affected_files": [
+      "src/services/billing.ts",
+      "src/api/routes/checkout.ts",
+      "src/workers/invoiceWorker.ts"
+    ],
+    "doc_drift_expected": false
+  },
+  "adversarial_phantom_probe": []
+}

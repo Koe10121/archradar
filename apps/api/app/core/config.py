@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     database_url: str = DEFAULT_DATABASE_URL
     redis_url: str = DEFAULT_REDIS_URL
     cors_origins: str = "http://localhost:3000"
+    seed_demo_on_startup: bool = False
 
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.5-flash"
@@ -35,9 +36,16 @@ class Settings(BaseSettings):
 
     @field_validator("database_url", mode="before")
     @classmethod
-    def _default_database_url_if_empty(cls, value: object) -> object:
+    def _normalize_database_url(cls, value: object) -> object:
         if value is None or (isinstance(value, str) and not value.strip()):
             return DEFAULT_DATABASE_URL
+        if isinstance(value, str):
+            trimmed = value.strip()
+            if trimmed.startswith("postgres://"):
+                return "postgresql+asyncpg://" + trimmed[len("postgres://") :]
+            if trimmed.startswith("postgresql://"):
+                return "postgresql+asyncpg://" + trimmed[len("postgresql://") :]
+            return trimmed
         return value
 
     @field_validator("redis_url", mode="before")

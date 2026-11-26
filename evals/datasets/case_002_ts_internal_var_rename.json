@@ -1,0 +1,17 @@
+{
+  "id": "case_002_ts_internal_var_rename",
+  "category": "benign_low_risk",
+  "title": "Rename local variable inside formatUsdCents",
+  "description": "Internal variable rename with unchanged exported signature and return format.",
+  "repo_fixture": "fixtures/mini_saas_ts",
+  "doc_files": ["README.md", "docs/ARCHITECTURE.md"],
+  "diff": "diff --git a/src/lib/formatters.ts b/src/lib/formatters.ts\nindex 1111111..2222222 100644\n--- a/src/lib/formatters.ts\n+++ b/src/lib/formatters.ts\n@@ -1,4 +1,4 @@\n export function formatUsdCents(cents: number): string {\n-  const dollars = (cents / 100).toFixed(2);\n-  return `$${dollars}`;\n+  const formattedDollars = (cents / 100).toFixed(2);\n+  return `$${formattedDollars}`;\n }\n",
+  "expected": {
+    "min_risk": "low",
+    "max_risk": "low",
+    "breaking_change_detected": false,
+    "must_include_affected_files": ["src/lib/formatters.ts"],
+    "doc_drift_expected": false
+  },
+  "adversarial_phantom_probe": []
+}

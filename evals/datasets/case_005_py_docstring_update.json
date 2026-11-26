@@ -1,0 +1,17 @@
+{
+  "id": "case_005_py_docstring_update",
+  "category": "benign_low_risk",
+  "title": "Clarify docstring on slugify_label",
+  "description": "Docstring-only update in standalone Python utility module.",
+  "repo_fixture": "fixtures/mini_fastapi_py",
+  "doc_files": ["README.md"],
+  "diff": "diff --git a/app/utils/text.py b/app/utils/text.py\nindex 1111111..2222222 100644\n--- a/app/utils/text.py\n+++ b/app/utils/text.py\n@@ -2,6 +2,6 @@\n \n \n def slugify_label(raw: str) -> str:\n-    \"\"\"Return a clean lowercase hyphenated label.\"\"\"\n+    \"\"\"Normalize whitespace and return a lowercase hyphenated slug.\"\"\"\n     cleaned = raw.strip().lower()\n     return cleaned.replace(\" \", \"-\")\n",
+  "expected": {
+    "min_risk": "low",
+    "max_risk": "low",
+    "breaking_change_detected": false,
+    "must_include_affected_files": ["app/utils/text.py"],
+    "doc_drift_expected": false
+  },
+  "adversarial_phantom_probe": []
+}

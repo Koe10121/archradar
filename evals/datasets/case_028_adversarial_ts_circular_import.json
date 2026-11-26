@@ -1,0 +1,21 @@
+{
+  "id": "case_028_adversarial_ts_circular_import",
+  "category": "adversarial_edge",
+  "title": "Breaking signature change inside TypeScript circular import cycle",
+  "description": "Verifies reverse BFS terminates cleanly without infinite loops across alpha.ts <-> beta.ts and captures consumer.ts.",
+  "repo_fixture": "fixtures/mini_edge_cases",
+  "doc_files": ["README.md"],
+  "diff": "diff --git a/src/cycle/alpha.ts b/src/cycle/alpha.ts\nindex 1111111..2222222 100644\n--- a/src/cycle/alpha.ts\n+++ b/src/cycle/alpha.ts\n@@ -1,6 +1,6 @@\n import { stepBeta } from \"./beta\";\n \n-export function stepAlpha(depth: number): string {\n+export function stepAlpha(depth: number, traceId: string): string {\n   if (depth <= 0) return \"done\";\n   return stepBeta(depth - 1);\n }\n",
+  "expected": {
+    "min_risk": "medium",
+    "max_risk": "critical",
+    "breaking_change_detected": true,
+    "must_include_affected_files": [
+      "src/cycle/alpha.ts",
+      "src/cycle/beta.ts",
+      "src/cycle/consumer.ts"
+    ],
+    "doc_drift_expected": false
+  },
+  "adversarial_phantom_probe": []
+}

@@ -1,0 +1,20 @@
+{
+  "id": "case_012_1hop_py_api_key_param",
+  "category": "direct_1hop_break",
+  "title": "Add required expected_tenant parameter to verify_api_key",
+  "description": "Required parameter addition breaks app/api/routes/orders.py.",
+  "repo_fixture": "fixtures/mini_fastapi_py",
+  "doc_files": ["README.md", "docs/ARCHITECTURE.md"],
+  "diff": "diff --git a/app/core/security.py b/app/core/security.py\nindex 1111111..2222222 100644\n--- a/app/core/security.py\n+++ b/app/core/security.py\n@@ -3,7 +3,7 @@\n from app.core.config import get_settings\n \n \n-def verify_api_key(token: str) -> str:\n+def verify_api_key(token: str, expected_tenant: str) -> str:\n     if not token:\n         raise ValueError(\"Missing API key\")\n-    return \"tenant_default\"\n+    return expected_tenant\n",
+  "expected": {
+    "min_risk": "medium",
+    "max_risk": "critical",
+    "breaking_change_detected": true,
+    "must_include_affected_files": [
+      "app/core/security.py",
+      "app/api/routes/orders.py"
+    ],
+    "doc_drift_expected": false
+  },
+  "adversarial_phantom_probe": []
+}

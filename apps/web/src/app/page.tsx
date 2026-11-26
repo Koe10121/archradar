@@ -2,6 +2,7 @@ import { ArchRadarWorkspace } from "@/components/archradar-workspace";
 import {
   fetchApiHealth,
   fetchRepositories,
+  fetchRepositoryAnalyses,
   fetchRepositoryGraph,
 } from "@/lib/api";
 
@@ -15,15 +16,19 @@ export default async function HomePage(): Promise<React.JSX.Element> {
 
   const initialRepos = reposRes.ok ? reposRes.data : [];
   const firstRepo = initialRepos[0];
-  const graphRes = firstRepo
-    ? await fetchRepositoryGraph(firstRepo.id, { isServer: true })
-    : null;
+  const [graphRes, analysesRes] = firstRepo
+    ? await Promise.all([
+        fetchRepositoryGraph(firstRepo.id, { isServer: true }),
+        fetchRepositoryAnalyses(firstRepo.id, { isServer: true }),
+      ])
+    : [null, null];
 
   return (
     <ArchRadarWorkspace
       initialHealth={initialHealth}
       initialRepos={initialRepos}
       initialGraph={graphRes && graphRes.ok ? graphRes.data : null}
+      initialAnalyses={analysesRes && analysesRes.ok ? analysesRes.data : []}
     />
   );
 }

@@ -20,14 +20,17 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   fetchRepositories,
+  fetchRepositoryAnalyses,
   fetchRepositoryGraph,
   type HealthCheckResult,
 } from "@/lib/api";
 import {
-  DEMO_GRAPH,
+  DEMO_BILLING_GRAPH,
+  DEMO_BILLING_REPO_ID,
+  DEMO_GRAPHS_BY_REPO_ID,
   DEMO_PR_SCENARIOS,
+  DEMO_REPOSITORIES,
   DEMO_REPOSITORY,
-  DEMO_REPO_ID,
 } from "@/lib/demo-data";
 import { type PRAnalysisResponse } from "@/lib/schemas/analysis";
 import { type GraphResponse, type RepositorySummary } from "@/lib/schemas/repo";
@@ -36,26 +39,37 @@ interface ArchRadarWorkspaceProps {
   initialHealth: HealthCheckResult;
   initialRepos: RepositorySummary[];
   initialGraph: GraphResponse | null;
+  initialAnalyses?: PRAnalysisResponse[];
 }
+
+const SCENARIO_BUTTONS: ReadonlyArray<{
+  index: number;
+  label: string;
+  toneClass: string;
+}> = [
+  { index: 0, label: "#42 Auth", toneClass: "text-red-300" },
+  { index: 1, label: "#51 Webhook", toneClass: "text-amber-300" },
+  { index: 2, label: "#47 Refactor", toneClass: "text-emerald-300" },
+];
 
 export function ArchRadarWorkspace({
   initialHealth,
   initialRepos,
   initialGraph,
+  initialAnalyses = [],
 }: ArchRadarWorkspaceProps): React.JSX.Element {
-  const [repos, setRepos] = useState<RepositorySummary[]>([
-    ...initialRepos,
-    DEMO_REPOSITORY,
-  ]);
+  const [liveRepos, setLiveRepos] = useState<RepositorySummary[]>(initialRepos);
   const [activeRepoId, setActiveRepoId] = useState<string>(
-    initialGraph?.repository_id ?? DEMO_REPO_ID
+    initialGraph?.repository_id ?? DEMO_BILLING_REPO_ID
   );
-  const [graph, setGraph] = useState<GraphResponse>(initialGraph ?? DEMO_GRAPH);
+  const [graph, setGraph] = useState<GraphResponse>(initialGraph ?? DEMO_BILLING_GRAPH);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [activeAnalysis, setActiveAnalysis] = useState<PRAnalysisResponse | null>(
-    initialGraph ? null : (DEMO_PR_SCENARIOS[0] ?? null)
+    initialGraph ? (initialAnalyses[0] ?? null) : (DEMO_PR_SCENARIOS[0] ?? null)
   );
-  const [blastOverlayActive, setBlastOverlayActive] = useState<boolean>(!initialGraph);
+  const [blastOverlayActive, setBlastOverlayActive] = useState<boolean>(
+    initialGraph ? initialAnalyses.length > 0 : true
+  );
   const [activeTab, setActiveTab] = useState<"blast" | "inspector">("blast");
   const [searchQuery, setSearchQuery] = useState("");
   const [focusedPaths, setFocusedPaths] = useState<string[]>([]);
@@ -64,9 +78,36 @@ export function ArchRadarWorkspace({
   const [indexOpen, setIndexOpen] = useState(false);
   const [statusError, setStatusError] = useState<string | null>(null);
 
+  const backendRepoIds = useMemo(
+    () => new Set(liveRepos.map((repo) => repo.id)),
+    [liveRepos]
+  );
+
+  const repos = useMemo(() => {
+    const liveUrls = new Set(liveRepos.map((repo) => repo.url));
+    const missingOfflineDemos = DEMO_REPOSITORIES.filter(
+      (demoRepo) => !liveUrls.has(demoRepo.url)
+    );
+    return [...liveRepos, ...missingOfflineDemos];
+  }, [liveRepos]);
+
   const activeRepo = useMemo(
     () => repos.find((r) => r.id === activeRepoId) ?? DEMO_REPOSITORY,
     [repos, activeRepoId]
+  );
+
+  const isOfflineDemo = !backendRepoIds.has(activeRepoId);
+
+  const matchingDemoScenarios = useMemo(
+    () =>
+      DEMO_PR_SCENARIOS.filter((scenario) => {
+        const demoRepo = DEMO_REPOSITORIES.find((r) => r.id === scenario.repository_id);
+        return (
+          scenario.repository_id === activeRepo.id ||
+          (demoRepo !== undefined && demoRepo.url === activeRepo.url)
+        );
+      }),
+    [activeRepo]
   );
 
   const selectedNode = useMemo(
@@ -88,39 +129,51 @@ export function ArchRadarWorkspace({
     setStatusError(null);
     setSelectedNodeId(null);
 
-    if (nextRepoId === DEMO_REPO_ID) {
-      setActiveRepoId(DEMO_REPO_ID);
-      setGraph(DEMO_GRAPH);
-      setActiveAnalysis(DEMO_PR_SCENARIOS[0] ?? null);
-      setBlastOverlayActive(true);
+    if (!backendRepoIds.has(nextRepoId)) {
+      const offlineGraph = DEMO_GRAPHS_BY_REPO_ID[nextRepoId] ?? DEMO_BILLING_GRAPH;
+      const defaultScenario =
+        DEMO_PR_SCENARIOS.find((s) => s.repository_id === nextRepoId) ?? null;
+      setActiveRepoId(nextRepoId);
+      setGraph(offlineGraph);
+      setActiveAnalysis(defaultScenario);
+      setBlastOverlayActive(defaultScenario !== null);
       setActiveTab("blast");
       return;
     }
 
-    const res = await fetchRepositoryGraph(nextRepoId);
-    if (!res.ok) {
-      setStatusError(`Failed to load repository graph: ${res.error}`);
+    const [graphRes, analysesRes] = await Promise.all([
+      fetchRepositoryGraph(nextRepoId),
+      fetchRepositoryAnalyses(nextRepoId),
+    ]);
+    if (!graphRes.ok) {
+      setStatusError(`Failed to load repository graph: ${graphRes.error}`);
       return;
     }
+    const latestAnalysis =
+      analysesRes.ok && analysesRes.data.length > 0 ? (analysesRes.data[0] ?? null) : null;
     setActiveRepoId(nextRepoId);
-    setGraph(res.data);
-    setActiveAnalysis(null);
-    setBlastOverlayActive(false);
+    setGraph(graphRes.data);
+    setActiveAnalysis(latestAnalysis);
+    setBlastOverlayActive(latestAnalysis !== null);
+    setActiveTab("blast");
   }
 
   async function handleRepoIndexed(repositoryId: string): Promise<void> {
-    const [reposRes, graphRes] = await Promise.all([
+    const [reposRes, graphRes, analysesRes] = await Promise.all([
       fetchRepositories(),
       fetchRepositoryGraph(repositoryId),
+      fetchRepositoryAnalyses(repositoryId),
     ]);
     if (reposRes.ok) {
-      setRepos([...reposRes.data, DEMO_REPOSITORY]);
+      setLiveRepos(reposRes.data);
     }
     if (graphRes.ok) {
+      const latestAnalysis =
+        analysesRes.ok && analysesRes.data.length > 0 ? (analysesRes.data[0] ?? null) : null;
       setActiveRepoId(repositoryId);
       setGraph(graphRes.data);
-      setActiveAnalysis(null);
-      setBlastOverlayActive(false);
+      setActiveAnalysis(latestAnalysis);
+      setBlastOverlayActive(latestAnalysis !== null);
       setSelectedNodeId(null);
     } else {
       setStatusError(graphRes.error);
@@ -150,11 +203,46 @@ export function ArchRadarWorkspace({
     setFocusTrigger((n) => n + 1);
   }
 
-  function handleSimulateDemoPR(scenarioIndex: number): void {
+  async function handleSimulateDemoPR(scenarioIndex: number): Promise<void> {
     const scenario = DEMO_PR_SCENARIOS[scenarioIndex];
     if (!scenario) return;
-    setActiveRepoId(DEMO_REPO_ID);
-    setGraph(DEMO_GRAPH);
+    setStatusError(null);
+    setSelectedNodeId(null);
+
+    const demoRepoMeta = DEMO_REPOSITORIES.find((r) => r.id === scenario.repository_id);
+    const matchedLiveRepo = demoRepoMeta
+      ? liveRepos.find((r) => r.id === demoRepoMeta.id || r.url === demoRepoMeta.url)
+      : undefined;
+
+    if (matchedLiveRepo) {
+      const [graphRes, analysesRes] = await Promise.all([
+        activeRepoId === matchedLiveRepo.id
+          ? Promise.resolve({ ok: true as const, data: graph })
+          : fetchRepositoryGraph(matchedLiveRepo.id),
+        fetchRepositoryAnalyses(matchedLiveRepo.id),
+      ]);
+      if (graphRes.ok) {
+        const matchedAnalysis = analysesRes.ok
+          ? analysesRes.data.find((a) => a.pr_number === scenario.pr_number)
+          : undefined;
+        const resolvedAnalysis = matchedAnalysis ?? scenario;
+        setActiveRepoId(matchedLiveRepo.id);
+        setGraph(graphRes.data);
+        setActiveAnalysis(resolvedAnalysis);
+        setBlastOverlayActive(true);
+        setActiveTab("blast");
+        handleFocusPaths([
+          ...resolvedAnalysis.blast_radius.direct,
+          ...resolvedAnalysis.blast_radius.hop_1,
+        ]);
+        return;
+      }
+    }
+
+    const offlineGraph =
+      DEMO_GRAPHS_BY_REPO_ID[scenario.repository_id] ?? DEMO_BILLING_GRAPH;
+    setActiveRepoId(scenario.repository_id);
+    setGraph(offlineGraph);
     setActiveAnalysis(scenario);
     setBlastOverlayActive(true);
     setActiveTab("blast");
@@ -175,7 +263,7 @@ export function ArchRadarWorkspace({
             <div>
               <div className="flex items-center gap-2">
                 <span className="text-sm font-bold tracking-tight">ArchRadar</span>
-                {activeRepoId === DEMO_REPO_ID && <Badge>Demo Mode</Badge>}
+                {activeRepo.is_demo && <Badge>Demo Mode</Badge>}
               </div>
               <p className="text-[11px] text-muted-foreground">
                 {graph.file_count} files · {graph.edge_count} edges
@@ -191,7 +279,7 @@ export function ArchRadarWorkspace({
           >
             {repos.map((repo) => (
               <option key={repo.id} value={repo.id}>
-                {repo.id === DEMO_REPO_ID ? "Demo: " : ""}
+                {repo.is_demo ? "Demo: " : ""}
                 {repo.owner}/{repo.name} ({repo.file_count} files)
               </option>
             ))}
@@ -240,7 +328,7 @@ export function ArchRadarWorkspace({
             size="sm"
             variant="secondary"
             className="h-8 text-xs"
-            onClick={() => handleSimulateDemoPR(0)}
+            onClick={() => void handleSimulateDemoPR(0)}
           >
             <Sparkles className="h-3.5 w-3.5 text-amber-400" />
             Simulate PR #42
@@ -286,7 +374,7 @@ export function ArchRadarWorkspace({
         </div>
 
         <aside className="flex flex-col overflow-hidden rounded-xl border border-border bg-card lg:h-[calc(100vh-6.25rem)]">
-          <div className="flex items-center justify-between border-b border-border px-3 py-2">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2">
             <div className="flex gap-1.5">
               <button
                 type="button"
@@ -312,25 +400,19 @@ export function ArchRadarWorkspace({
               </button>
             </div>
 
-            {activeRepoId === DEMO_REPO_ID && (
-              <div className="flex items-center gap-1 text-[11px]">
-                <Layers className="h-3 w-3 text-muted-foreground" />
+            <div className="flex items-center gap-1 text-[11px]">
+              <Layers className="h-3 w-3 text-muted-foreground" />
+              {SCENARIO_BUTTONS.map((btn) => (
                 <button
+                  key={btn.label}
                   type="button"
-                  onClick={() => handleSimulateDemoPR(0)}
-                  className="rounded px-1.5 py-0.5 text-amber-300 hover:bg-secondary"
+                  onClick={() => void handleSimulateDemoPR(btn.index)}
+                  className={`rounded px-1.5 py-0.5 hover:bg-secondary ${btn.toneClass}`}
                 >
-                  #42
+                  {btn.label}
                 </button>
-                <button
-                  type="button"
-                  onClick={() => handleSimulateDemoPR(1)}
-                  className="rounded px-1.5 py-0.5 text-emerald-300 hover:bg-secondary"
-                >
-                  #47
-                </button>
-              </div>
-            )}
+              ))}
+            </div>
           </div>
 
           <div className="flex-1 overflow-y-auto">
@@ -362,6 +444,8 @@ export function ArchRadarWorkspace({
         open={analyzeOpen}
         repoId={activeRepoId}
         repoLabel={`${activeRepo.owner}/${activeRepo.name}`}
+        isOfflineDemo={isOfflineDemo}
+        demoScenarios={matchingDemoScenarios}
         graph={graph}
         onClose={() => setAnalyzeOpen(false)}
         onAnalyzed={(analysis) => {

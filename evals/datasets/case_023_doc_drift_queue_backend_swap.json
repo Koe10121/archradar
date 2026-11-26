@@ -1,0 +1,17 @@
+{
+  "id": "case_023_doc_drift_queue_backend_swap",
+  "category": "doc_drift",
+  "title": "Switch notification worker from REDIS_URL to SQS_QUEUE_URL",
+  "description": "Replaces Redis queue config with SQS_QUEUE_URL in notify_worker.py without updating docs/ARCHITECTURE.md.",
+  "repo_fixture": "fixtures/mini_fastapi_py",
+  "doc_files": ["README.md", "docs/ARCHITECTURE.md"],
+  "diff": "diff --git a/app/workers/notify_worker.py b/app/workers/notify_worker.py\nindex 1111111..2222222 100644\n--- a/app/workers/notify_worker.py\n+++ b/app/workers/notify_worker.py\n@@ -1,10 +1,11 @@\n \"\"\"Background shipment notification worker.\"\"\"\n \n+import os\n from app.core.config import get_settings\n from app.db.models import OrderRecord\n from app.services.fulfillment import mark_shipped\n \n \n def dispatch_notification(order: OrderRecord) -> str:\n-    settings = get_settings()\n+    sqs_url = os.environ[\"SQS_QUEUE_URL\"]\n     mark_shipped(order.order_id)\n-    return f\"{settings.redis_url}:{order.sku}\"\n+    return f\"{sqs_url}:{order.sku}\"\n",
+  "expected": {
+    "min_risk": "medium",
+    "max_risk": "high",
+    "breaking_change_detected": false,
+    "must_include_affected_files": ["app/workers/notify_worker.py"],
+    "doc_drift_expected": true
+  },
+  "adversarial_phantom_probe": []
+}

@@ -1,0 +1,20 @@
+{
+  "id": "case_024_doc_drift_new_shipping_env",
+  "category": "doc_drift",
+  "title": "Add required SHIPPING_HMAC_HEADER setting without README update",
+  "description": "Introduces SHIPPING_HMAC_HEADER in app/core/config.py not documented in README.md.",
+  "repo_fixture": "fixtures/mini_fastapi_py",
+  "doc_files": ["README.md", "docs/ARCHITECTURE.md"],
+  "diff": "diff --git a/app/core/config.py b/app/core/config.py\nindex 1111111..2222222 100644\n--- a/app/core/config.py\n+++ b/app/core/config.py\n@@ -5,6 +5,7 @@ from dataclasses import dataclass\n @dataclass(frozen=True)\n class Settings:\n     webhook_secret: str = \"whsec_demo\"\n     redis_url: str = \"redis://localhost:6379/0\"\n+    shipping_hmac_header: str = \"X-Shipping-Signature\"\n \n \n",
+  "expected": {
+    "min_risk": "low",
+    "max_risk": "high",
+    "breaking_change_detected": false,
+    "must_include_affected_files": [
+      "app/core/config.py",
+      "app/core/security.py"
+    ],
+    "doc_drift_expected": true
+  },
+  "adversarial_phantom_probe": []
+}

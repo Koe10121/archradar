@@ -1,0 +1,22 @@
+{
+  "id": "case_020_transitive_3hop_barrel_leaf",
+  "category": "transitive_break",
+  "title": "Add required salt parameter to computeLeafHash behind 2 barrel layers",
+  "description": "3-hop barrel chain from leaf.ts -> sub/index.ts -> barrel/index.ts -> caller.ts.",
+  "repo_fixture": "fixtures/mini_edge_cases",
+  "doc_files": ["README.md"],
+  "diff": "diff --git a/src/barrel/leaf.ts b/src/barrel/leaf.ts\nindex 1111111..2222222 100644\n--- a/src/barrel/leaf.ts\n+++ b/src/barrel/leaf.ts\n@@ -1,3 +1,3 @@\n-export function computeLeafHash(input: string): string {\n-  return `hash_${input}`;\n+export function computeLeafHash(input: string, salt: string): string {\n+  return `hash_${salt}_${input}`;\n }\n",
+  "expected": {
+    "min_risk": "medium",
+    "max_risk": "critical",
+    "breaking_change_detected": true,
+    "must_include_affected_files": [
+      "src/barrel/leaf.ts",
+      "src/barrel/sub/index.ts",
+      "src/barrel/index.ts",
+      "src/barrel/caller.ts"
+    ],
+    "doc_drift_expected": false
+  },
+  "adversarial_phantom_probe": []
+}

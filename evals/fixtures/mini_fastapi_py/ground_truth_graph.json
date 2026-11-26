@@ -1,0 +1,18 @@
+{
+  "edges": [
+    ["app/core/security.py", "app/core/config.py"],
+    ["app/db/repository.py", "app/db/models.py"],
+    ["app/db/__init__.py", "app/db/repository.py"],
+    ["app/services/inventory.py", "app/db/__init__.py"],
+    ["app/services/inventory.py", "app/db/models.py"],
+    ["app/services/fulfillment.py", "app/db/__init__.py"],
+    ["app/services/fulfillment.py", "app/services/inventory.py"],
+    ["app/api/routes/orders.py", "app/core/security.py"],
+    ["app/api/routes/orders.py", "app/services/fulfillment.py"],
+    ["app/api/webhooks/shipping.py", "app/core/security.py"],
+    ["app/api/webhooks/shipping.py", "app/services/fulfillment.py"],
+    ["app/workers/notify_worker.py", "app/core/config.py"],
+    ["app/workers/notify_worker.py", "app/db/models.py"],
+    ["app/workers/notify_worker.py", "app/services/fulfillment.py"]
+  ]
+}

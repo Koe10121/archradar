@@ -1,0 +1,17 @@
+{
+  "id": "case_003_ts_theme_token_tweak",
+  "category": "benign_low_risk",
+  "title": "Adjust borderRadiusPx in leaf theme tokens",
+  "description": "Cosmetic UI token change in an isolated leaf file with zero downstream dependents.",
+  "repo_fixture": "fixtures/mini_saas_ts",
+  "doc_files": ["README.md"],
+  "diff": "diff --git a/src/styles/theme.ts b/src/styles/theme.ts\nindex 1111111..2222222 100644\n--- a/src/styles/theme.ts\n+++ b/src/styles/theme.ts\n@@ -1,5 +1,5 @@\n export const THEME_TOKENS = {\n   accentHex: \"#F59E0B\",\n   surfaceHex: \"#0F172A\",\n-  borderRadiusPx: 8,\n+  borderRadiusPx: 10,\n };\n",
+  "expected": {
+    "min_risk": "low",
+    "max_risk": "low",
+    "breaking_change_detected": false,
+    "must_include_affected_files": ["src/styles/theme.ts"],
+    "doc_drift_expected": false
+  },
+  "adversarial_phantom_probe": []
+}

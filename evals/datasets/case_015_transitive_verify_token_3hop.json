@@ -1,0 +1,24 @@
+{
+  "id": "case_015_transitive_verify_token_3hop",
+  "category": "transitive_break",
+  "title": "Enforce required expectedAudience parameter in verifyToken",
+  "description": "3-hop transitive breakage from token.ts through auth/billing to checkout, stripe webhook, and invoice worker.",
+  "repo_fixture": "fixtures/mini_saas_ts",
+  "doc_files": ["README.md", "docs/ARCHITECTURE.md"],
+  "diff": "diff --git a/src/lib/token.ts b/src/lib/token.ts\nindex 1111111..2222222 100644\n--- a/src/lib/token.ts\n+++ b/src/lib/token.ts\n@@ -3,7 +3,7 @@ export interface SessionClaims {\n   tier: string;\n }\n \n-export function verifyToken(token: string): SessionClaims {\n+export function verifyToken(token: string, expectedAudience: string): SessionClaims {\n   if (!token) {\n     throw new Error(\"Missing token\");\n   }\n-  return { sub: \"usr_123\", tier: \"pro\" };\n+  return { sub: `usr_${expectedAudience}`, tier: \"pro\" };\n }\n",
+  "expected": {
+    "min_risk": "high",
+    "max_risk": "critical",
+    "breaking_change_detected": true,
+    "must_include_affected_files": [
+      "src/lib/token.ts",
+      "src/middleware/auth.ts",
+      "src/services/billing.ts",
+      "src/api/routes/checkout.ts",
+      "src/api/webhooks/stripe.ts",
+      "src/workers/invoiceWorker.ts"
+    ],
+    "doc_drift_expected": false
+  },
+  "adversarial_phantom_probe": []
+}

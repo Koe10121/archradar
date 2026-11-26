@@ -1,5 +1,6 @@
 """FastAPI application entrypoint and factory."""
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -13,8 +14,11 @@ from app.api.routes.repos import router as repos_router
 from app.api.routes.webhooks import router as webhooks_router
 from app.core.config import Settings, get_settings
 from app.core.logging import CorrelationIdMiddleware, configure_logging
-from app.db.session import create_db_engine
+from app.db.session import create_db_engine, create_session_factory
 from app.services.ai_analyzer import LLMProvider
+from app.services.demo_seeder import seed_demo_data
+
+logger = logging.getLogger(__name__)
 
 
 def create_app(
@@ -31,6 +35,23 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+        if resolved_settings.seed_demo_on_startup:
+            try:
+                session_factory = create_session_factory(application.state.db_engine)
+                async with session_factory() as session:
+                    summary = await seed_demo_data(session)
+                logger.info(
+                    "Demo startup seed complete (repos_created=%d, analyses_created=%d)",
+                    summary.repos_created,
+                    summary.analyses_created,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Demo startup seed skipped (%s: %s)",
+                    type(exc).__name__,
+                    exc,
+                    exc_info=True,
+                )
         yield
         if owns_engine:
             await application.state.db_engine.dispose()

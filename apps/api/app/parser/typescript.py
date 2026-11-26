@@ -161,6 +161,8 @@ class TypeScriptAdapter(LanguageAdapter):
 
         if node.type == "export_statement":
             self._parse_export_statement(node, exports, imports)
+            for child in node.children:
+                self._walk_node(child, exports, imports)
             return
 
         if node.type == "call_expression":

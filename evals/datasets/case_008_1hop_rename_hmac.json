@@ -1,0 +1,21 @@
+{
+  "id": "case_008_1hop_rename_hmac",
+  "category": "direct_1hop_break",
+  "title": "Rename verifyHmacSignature to verifyWebhookHmac",
+  "description": "Direct 1-hop breaking rename breaking src/api/webhooks/stripe.ts and src/lib/index.ts.",
+  "repo_fixture": "fixtures/mini_saas_ts",
+  "doc_files": ["README.md", "docs/ARCHITECTURE.md"],
+  "diff": "diff --git a/src/lib/crypto.ts b/src/lib/crypto.ts\nindex 1111111..2222222 100644\n--- a/src/lib/crypto.ts\n+++ b/src/lib/crypto.ts\n@@ -1,3 +1,3 @@\n-export function verifyHmacSignature(payload: string, signature: string, secret: string): boolean {\n+export function verifyWebhookHmac(payload: string, signature: string, secret: string): boolean {\n   return Boolean(payload && signature && secret);\n }\n",
+  "expected": {
+    "min_risk": "medium",
+    "max_risk": "critical",
+    "breaking_change_detected": true,
+    "must_include_affected_files": [
+      "src/lib/crypto.ts",
+      "src/api/webhooks/stripe.ts",
+      "src/lib/index.ts"
+    ],
+    "doc_drift_expected": false
+  },
+  "adversarial_phantom_probe": []
+}

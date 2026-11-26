@@ -1,0 +1,21 @@
+{
+  "id": "case_025_doc_drift_auth_header_scheme",
+  "category": "doc_drift",
+  "title": "Change auth middleware header from Authorization: Bearer to X-Session-Token",
+  "description": "Switches auth header extraction in auth.ts while docs/ARCHITECTURE.md still specifies Authorization: Bearer.",
+  "repo_fixture": "fixtures/mini_saas_ts",
+  "doc_files": ["README.md", "docs/ARCHITECTURE.md"],
+  "diff": "diff --git a/src/middleware/auth.ts b/src/middleware/auth.ts\nindex 1111111..2222222 100644\n--- a/src/middleware/auth.ts\n+++ b/src/middleware/auth.ts\n@@ -6,8 +6,7 @@ export interface AuthContext {\n }\n \n export function requireAuth(headers: Record<string, string>): AuthContext {\n-  const header = headers[\"authorization\"] ?? headers[\"Authorization\"] ?? \"\";\n-  const token = header.replace(\"Bearer \", \"\").trim();\n+  const token = (headers[\"x-session-token\"] ?? headers[\"X-Session-Token\"] ?? \"\").trim();\n   const claims = verifyToken(token);\n   return { userId: claims.sub, tier: claims.tier };\n }\n",
+  "expected": {
+    "min_risk": "medium",
+    "max_risk": "critical",
+    "breaking_change_detected": true,
+    "must_include_affected_files": [
+      "src/middleware/auth.ts",
+      "src/services/billing.ts",
+      "src/api/routes/checkout.ts"
+    ],
+    "doc_drift_expected": true
+  },
+  "adversarial_phantom_probe": []
+}

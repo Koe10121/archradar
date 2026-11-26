@@ -1,0 +1,17 @@
+{
+  "id": "case_022_doc_drift_stripe_env_rename",
+  "category": "doc_drift",
+  "title": "Rename STRIPE_WEBHOOK_SECRET to STRIPE_SIGNING_KEY",
+  "description": "Changes required environment variable in stripe.ts while README.md still documents STRIPE_WEBHOOK_SECRET.",
+  "repo_fixture": "fixtures/mini_saas_ts",
+  "doc_files": ["README.md", "docs/ARCHITECTURE.md"],
+  "diff": "diff --git a/src/api/webhooks/stripe.ts b/src/api/webhooks/stripe.ts\nindex 1111111..2222222 100644\n--- a/src/api/webhooks/stripe.ts\n+++ b/src/api/webhooks/stripe.ts\n@@ -3,7 +3,7 @@ import { recordSecurityEvent } from \"@/services/audit\";\n import { syncSubscriptionState } from \"@/services/billing\";\n \n export function handleStripeWebhook(payload: string, sig: string): boolean {\n-  const secret = process.env.STRIPE_WEBHOOK_SECRET ?? \"\";\n+  const secret = process.env.STRIPE_SIGNING_KEY ?? \"\";\n   if (!verifyHmacSignature(payload, sig, secret)) {\n     return false;\n   }\n",
+  "expected": {
+    "min_risk": "medium",
+    "max_risk": "critical",
+    "breaking_change_detected": true,
+    "must_include_affected_files": ["src/api/webhooks/stripe.ts"],
+    "doc_drift_expected": true
+  },
+  "adversarial_phantom_probe": []
+}

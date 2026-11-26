@@ -1,0 +1,17 @@
+{
+  "id": "case_007_ts_ui_copy_tweak",
+  "category": "benign_low_risk",
+  "title": "Update UI label copy in BillingSummary.tsx",
+  "description": "Leaf UI presentation copy edit with zero downstream importers.",
+  "repo_fixture": "fixtures/mini_saas_ts",
+  "doc_files": ["README.md"],
+  "diff": "diff --git a/src/ui/BillingSummary.tsx b/src/ui/BillingSummary.tsx\nindex 1111111..2222222 100644\n--- a/src/ui/BillingSummary.tsx\n+++ b/src/ui/BillingSummary.tsx\n@@ -2,6 +2,6 @@ import { formatUsdCents } from \"@/lib/formatters\";\n import { postCheckout } from \"@/api/routes/checkout\";\n \n export function renderBillingSummary(cents: number): string {\n-  const label = cents > 0 ? \"Due now\" : \"Credit\";\n+  const label = cents > 0 ? \"Amount due\" : \"Credit\";\n   return `${label}: ${formatUsdCents(cents)}`;\n }\n",
+  "expected": {
+    "min_risk": "low",
+    "max_risk": "low",
+    "breaking_change_detected": false,
+    "must_include_affected_files": ["src/ui/BillingSummary.tsx"],
+    "doc_drift_expected": false
+  },
+  "adversarial_phantom_probe": []
+}

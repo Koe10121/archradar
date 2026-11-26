@@ -1,0 +1,21 @@
+{
+  "edges": [
+    ["src/lib/index.ts", "src/lib/token.ts"],
+    ["src/lib/index.ts", "src/lib/crypto.ts"],
+    ["src/lib/index.ts", "src/lib/formatters.ts"],
+    ["src/middleware/auth.ts", "src/lib/token.ts"],
+    ["src/middleware/rateLimit.ts", "src/lib/token.ts"],
+    ["src/services/session.ts", "src/lib/index.ts"],
+    ["src/services/billing.ts", "src/middleware/auth.ts"],
+    ["src/services/billing.ts", "src/services/audit.ts"],
+    ["src/api/routes/checkout.ts", "src/middleware/auth.ts"],
+    ["src/api/routes/checkout.ts", "src/services/billing.ts"],
+    ["src/api/webhooks/stripe.ts", "src/lib/crypto.ts"],
+    ["src/api/webhooks/stripe.ts", "src/services/audit.ts"],
+    ["src/api/webhooks/stripe.ts", "src/services/billing.ts"],
+    ["src/workers/invoiceWorker.ts", "src/lib/formatters.ts"],
+    ["src/workers/invoiceWorker.ts", "src/services/billing.ts"],
+    ["src/ui/BillingSummary.tsx", "src/lib/formatters.ts"],
+    ["src/ui/BillingSummary.tsx", "src/api/routes/checkout.ts"]
+  ]
+}
