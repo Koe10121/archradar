@@ -346,19 +346,21 @@ async def test_pr_comment_endpoint_and_webhook_dry_run_preview(
 def test_sanitize_asyncpg_url_strips_libpq_ssl_params() -> None:
     """Neon/libpq sslmode & channel_binding params convert cleanly for asyncpg."""
     clean_url, connect_args = sanitize_asyncpg_url(
-        "postgresql+asyncpg://user:pass@ep-cool.neon.tech/neondb"
+        "postgresql+asyncpg://user:pass@ep-cool-pooler.us-east-1.aws.neon.tech/neondb"
         "?sslmode=require&channel_binding=require&application_name=archradar"
     )
     assert clean_url == (
-        "postgresql+asyncpg://user:pass@ep-cool.neon.tech/neondb?application_name=archradar"
+        "postgresql+asyncpg://user:pass@ep-cool-pooler.us-east-1.aws.neon.tech/neondb"
+        "?application_name=archradar"
     )
     assert isinstance(connect_args["ssl"], ssl.SSLContext)
+    assert connect_args["statement_cache_size"] == 0
 
     disabled_url, disabled_args = sanitize_asyncpg_url(
         "postgresql+asyncpg://user:pass@localhost:5432/db?sslmode=disable"
     )
     assert disabled_url == "postgresql+asyncpg://user:pass@localhost:5432/db"
-    assert disabled_args == {"ssl": False}
+    assert disabled_args["ssl"] is False
 
 
 async def test_cloud_production_blocks_local_path_and_lazy_bootstraps(

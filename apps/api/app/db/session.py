@@ -27,12 +27,16 @@ def sanitize_asyncpg_url(database_url: str) -> tuple[str, dict[str, object]]:
         return database_url, {}
 
     parsed = urlsplit(database_url)
+    connect_args: dict[str, object] = {}
+
+    if "-pooler." in parsed.netloc.lower() or os.environ.get("VERCEL") == "1":
+        connect_args["statement_cache_size"] = 0
+
     if not parsed.query:
-        return database_url, {}
+        return database_url, connect_args
 
     raw_params = parse_qsl(parsed.query, keep_blank_values=True)
     kept_params: list[tuple[str, str]] = []
-    connect_args: dict[str, object] = {}
 
     for key, val in raw_params:
         lower_key = key.lower()
