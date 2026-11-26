@@ -11,9 +11,13 @@ import {
 import { type GraphNode } from "@/lib/schemas/repo";
 import { cn } from "@/lib/utils";
 
+export type DriftNodeStatus = "none" | "added" | "coupling_up" | "coupling_down" | "unchanged";
+
 export type FileNodeData = {
   node: GraphNode;
   blastTier: BlastTier;
+  driftStatus?: DriftNodeStatus;
+  inDegreeDelta?: number;
   isSelected: boolean;
   isSearchMatch: boolean;
   isFlowHighlighted: boolean;
@@ -27,6 +31,7 @@ function formatLanguageTag(language: string): string {
   if (lower === "typescript") return "TS";
   if (lower === "javascript") return "JS";
   if (lower === "python") return "PY";
+  if (lower === "go") return "GO";
   return lower.slice(0, 3).toUpperCase();
 }
 
@@ -36,6 +41,8 @@ export const FileNode = React.memo(function FileNode({
   const {
     node,
     blastTier,
+    driftStatus = "none",
+    inDegreeDelta = 0,
     isSelected,
     isSearchMatch,
     isFlowHighlighted,
@@ -61,11 +68,23 @@ export const FileNode = React.memo(function FileNode({
             ? "opacity-25"
             : "";
 
+  const driftClasses =
+    blastTier !== "none" || driftStatus === "none"
+      ? ""
+      : driftStatus === "added"
+        ? "ring-2 ring-emerald-400 border-emerald-400 bg-emerald-950/55 shadow-[0_0_22px_rgba(16,185,129,0.28)]"
+        : driftStatus === "coupling_up"
+          ? "ring-1 ring-amber-400/80 border-amber-400/70 bg-amber-950/25"
+          : driftStatus === "coupling_down"
+            ? "ring-1 ring-sky-400/70 border-sky-400/60 bg-sky-950/20"
+            : "opacity-45";
+
   return (
     <div
       className={cn(
         "relative w-[260px] overflow-hidden rounded-xl border border-slate-700/80 bg-slate-900/95 px-3.5 py-2.5 text-slate-100 shadow-lg transition-all duration-200",
         blastClasses,
+        driftClasses,
         isFlowHighlighted && "ring-2 ring-amber-300 opacity-100",
         isSearchMatch && "ring-2 ring-sky-400 opacity-100",
         isSelected && "ring-2 ring-white opacity-100"
@@ -121,6 +140,23 @@ export const FileNode = React.memo(function FileNode({
           {blastTier === "hop_2_plus" && (
             <span className="rounded bg-[#FCA5A5]/20 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-[#FCA5A5]">
               2-3H
+            </span>
+          )}
+          {blastTier === "none" && driftStatus === "added" && (
+            <span className="rounded bg-emerald-500/20 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-emerald-300">
+              NEW
+            </span>
+          )}
+          {blastTier === "none" && inDegreeDelta !== 0 && driftStatus !== "added" && (
+            <span
+              className={cn(
+                "rounded px-1.5 py-0.5 font-mono text-[10px] font-semibold",
+                inDegreeDelta > 0
+                  ? "bg-amber-500/20 text-amber-300"
+                  : "bg-sky-500/20 text-sky-300"
+              )}
+            >
+              {inDegreeDelta > 0 ? `+${inDegreeDelta}` : inDegreeDelta}
             </span>
           )}
           <span

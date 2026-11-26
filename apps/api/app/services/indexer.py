@@ -14,10 +14,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.entities import DependencyEdge, FileNode, GraphSnapshot, Repository
 from app.parser.base import (
+    AliasConfig,
     ParsedFile,
     ensure_within_root,
     normalize_repo_path,
 )
+from app.parser.go import load_go_module_path
 from app.parser.registry import ParserRegistry
 from app.parser.typescript import load_tsconfig_aliases
 
@@ -131,7 +133,13 @@ class RepoIndexer:
         try:
             source_entries = self._collect_source_files(resolved_root)
             known_files = {rel_path for rel_path, _ in source_entries}
-            alias_config = load_tsconfig_aliases(resolved_root)
+            ts_aliases = load_tsconfig_aliases(resolved_root)
+            go_module_path = load_go_module_path(resolved_root)
+            alias_config = AliasConfig(
+                base_url=ts_aliases.base_url,
+                paths=ts_aliases.paths,
+                go_module_path=go_module_path,
+            )
 
             parsed_by_path: dict[str, ParsedFile] = {}
             for rel_path, abs_path in source_entries:

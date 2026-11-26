@@ -3,6 +3,7 @@
 import posixpath
 
 from app.parser.base import LanguageAdapter
+from app.parser.go import GoAdapter
 from app.parser.python import PythonAdapter
 from app.parser.typescript import TypeScriptAdapter
 
@@ -11,7 +12,11 @@ class ParserRegistry:
     """Lookup table from file extension to LanguageAdapter instance."""
 
     def __init__(self, adapters: list[LanguageAdapter] | None = None) -> None:
-        resolved = adapters if adapters is not None else [TypeScriptAdapter(), PythonAdapter()]
+        resolved = (
+            adapters
+            if adapters is not None
+            else [TypeScriptAdapter(), PythonAdapter(), GoAdapter()]
+        )
         self._by_ext: dict[str, LanguageAdapter] = {}
         for adapter in resolved:
             for ext in adapter.extensions:

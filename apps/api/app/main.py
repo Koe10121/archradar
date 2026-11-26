@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from app.api.routes.analyses import router as analyses_router
 from app.api.routes.health import router as health_router
 from app.api.routes.repos import router as repos_router
+from app.api.routes.telemetry import router as telemetry_router
 from app.api.routes.webhooks import router as webhooks_router
 from app.core.config import Settings, get_settings
 from app.core.logging import CorrelationIdMiddleware, configure_logging
@@ -76,6 +77,7 @@ def create_app(
     application.include_router(health_router)
     application.include_router(repos_router)
     application.include_router(analyses_router)
+    application.include_router(telemetry_router)
     application.include_router(webhooks_router)
     return application
 

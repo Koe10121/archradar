@@ -52,10 +52,12 @@ async def test_benchmark_simulated_thresholds() -> None:
 
     assert "ArchRadar Evaluation Benchmark Report" in report_md
     assert summary["case_count"] == 30
+    assert summary["cases_passed"] == 30
     assert summary["graph_precision"] >= 0.98
     assert summary["graph_recall"] >= 0.98
     assert summary["blast_recall"] == 1.0
     assert summary["post_gate_phantom_rate"] == 0.0
     assert summary["hallucinations_intercepted"] >= 2
-    assert summary["risk_agreement"] >= 0.85
+    assert summary["risk_agreement"] == 1.0
+    assert summary["breaking_accuracy"] == 1.0
     assert summary["doc_drift_accuracy"] >= 0.85

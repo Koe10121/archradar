@@ -62,9 +62,58 @@ export const RepoIndexResponseSchema = z.object({
   edge_count: z.number().int(),
 });
 
+export const SnapshotSummarySchema = z.object({
+  id: z.string(),
+  repository_id: z.string(),
+  commit_sha: z.string(),
+  file_count: z.number().int(),
+  edge_count: z.number().int(),
+  status: z.string(),
+  created_at: z.string(),
+});
+
+export const SnapshotListSchema = z.array(SnapshotSummarySchema);
+
+export const SnapshotDiffEdgeSchema = z.object({
+  source_path: z.string(),
+  target_path: z.string(),
+  edge_type: z.string(),
+  imported_symbols: z.array(z.string()),
+});
+
+export const CentralityDeltaSchema = z.object({
+  path: z.string(),
+  module_group: z.string(),
+  language: z.string(),
+  from_in_degree: z.number().int(),
+  to_in_degree: z.number().int(),
+  in_degree_delta: z.number().int(),
+  from_out_degree: z.number().int(),
+  to_out_degree: z.number().int(),
+  out_degree_delta: z.number().int(),
+  status: z.enum(["added", "removed", "changed"]),
+});
+
+export const SnapshotDiffResponseSchema = z.object({
+  repository_id: z.string(),
+  from_snapshot: SnapshotSummarySchema,
+  to_snapshot: SnapshotSummarySchema,
+  added_files: z.array(z.string()),
+  removed_files: z.array(z.string()),
+  added_edges: z.array(SnapshotDiffEdgeSchema),
+  removed_edges: z.array(SnapshotDiffEdgeSchema),
+  centrality_deltas: z.array(CentralityDeltaSchema),
+  file_count_delta: z.number().int(),
+  edge_count_delta: z.number().int(),
+});
+
 export type ExportedSymbol = z.infer<typeof ExportedSymbolSchema>;
 export type GraphNode = z.infer<typeof GraphNodeSchema>;
 export type GraphEdge = z.infer<typeof GraphEdgeSchema>;
 export type GraphResponse = z.infer<typeof GraphResponseSchema>;
 export type RepositorySummary = z.infer<typeof RepositorySummarySchema>;
 export type RepoIndexResponse = z.infer<typeof RepoIndexResponseSchema>;
+export type SnapshotSummary = z.infer<typeof SnapshotSummarySchema>;
+export type SnapshotDiffEdge = z.infer<typeof SnapshotDiffEdgeSchema>;
+export type CentralityDelta = z.infer<typeof CentralityDeltaSchema>;
+export type SnapshotDiffResponse = z.infer<typeof SnapshotDiffResponseSchema>;

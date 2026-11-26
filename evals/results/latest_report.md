@@ -1,6 +1,6 @@
 # ArchRadar Evaluation Benchmark Report
 
-- **Generated:** 2026-11-26 13:37 UTC
+- **Generated:** 2026-11-26 13:58 UTC
 - **Benchmark Mode:** `deterministic + simulated-llm (offline reproducible; no GEMINI_API_KEY)`
 - **Fixtures Evaluated:** 3 repositories
 - **Golden PR Cases:** 30 cases across 5 categories
@@ -15,13 +15,13 @@
 | Blast-Radius Recall (<= 3 hops) | 100.0% | **100.0%** | PASS |
 | Post-Gate Phantom File Citations | 0.0% | **0.0%** (119 valid / 2 intercepted) | PASS |
 | Subgraph Adherence | >= 95.0% | **100.0%** | PASS |
-| Risk Classification Agreement | >= 85.0% | **96.7%** (29/30 full pass) | PASS |
+| Risk Classification Agreement | >= 85.0% | **100.0%** (30/30 full pass) | PASS |
 | Critical/High Bug False Negative Rate | <= 5.0% | **0.0%** (0/6) | PASS |
-| Breaking-Change Detection Accuracy | >= 85.0% | **96.7%** | PASS |
+| Breaking-Change Detection Accuracy | >= 85.0% | **100.0%** | PASS |
 | Documentation Drift Detection Accuracy | >= 85.0% | **100.0%** | PASS |
-| Deterministic AST + BFS Latency (Median / P95) | < 200 ms | **0.08 ms / 0.15 ms** | PASS |
-| End-to-End Pipeline Latency (Median / P95) | < 3,000 ms | **0.35 ms / 0.65 ms** | PASS |
-| Avg Tokens / PR (Prompt + Completion) | ~4,900 tok | **1284 + 216 tok** | PASS |
+| Deterministic AST + BFS Latency (Median / P95) | < 200 ms | **0.10 ms / 0.20 ms** | PASS |
+| End-to-End Pipeline Latency (Median / P95) | < 3,000 ms | **0.38 ms / 0.99 ms** | PASS |
+| Avg Tokens / PR (Prompt + Completion) | ~4,900 tok | **1283 + 216 tok** | PASS |
 | Estimated Cost / PR (1,000 PRs) | < $0.01 ($10.00) | **$0.000322 ($0.32 / 1k PRs)** | PASS |
 
 ## 2. Deterministic Graph Accuracy by Fixture
@@ -40,7 +40,7 @@
 | `direct_1hop_break` | 7 | 7/7 | 100.0% | 100.0% | 100.0% | 100.0% |
 | `transitive_break` | 6 | 6/6 | 100.0% | 100.0% | 100.0% | 100.0% |
 | `doc_drift` | 5 | 5/5 | 100.0% | 100.0% | 100.0% | 100.0% |
-| `adversarial_edge` | 5 | 4/5 | 100.0% | 80.0% | 80.0% | 100.0% |
+| `adversarial_edge` | 5 | 5/5 | 100.0% | 100.0% | 100.0% | 100.0% |
 
 ## 4. Per-Case Results (All 30 Cases)
 
@@ -75,15 +75,12 @@
 | `case_027_adversarial_prompt_injection_py` | `adversarial_edge` | medium..critical | high | 100% | 3 (stripped 1) | PASS | gate_stripped=1 |
 | `case_028_adversarial_ts_circular_import` | `adversarial_edge` | medium..critical | medium | 100% | 3 (stripped 0) | PASS | ok |
 | `case_029_adversarial_py_circular_import` | `adversarial_edge` | medium..critical | medium | 100% | 3 (stripped 0) | PASS | ok |
-| `case_030_adversarial_massive_noisy_diff` | `adversarial_edge` | medium..critical | low | 100% | 5 (stripped 0) | FAIL | risk=low (expected medium..critical); breaking=False (expected True) |
+| `case_030_adversarial_massive_noisy_diff` | `adversarial_edge` | medium..critical | high | 100% | 5 (stripped 0) | PASS | ok |
 
 ## 5. Known Limitations & Failure Log
 
-### Observed Benchmark Failures
-- **`case_030_adversarial_massive_noisy_diff` (adversarial_edge):** risk=low (expected medium..critical); breaking=False (expected True). The 12,000-character prefix diff truncation omitted the buried breaking hunk, causing the AI layer to under-score risk even though deterministic BFS achieved 100% blast-radius recall.
-
 ### Architectural Boundaries & Trade-Offs
-1. **Naive 12,000-character prefix diff truncation (`case_030`):** `parse_unified_diff` parses the entire patch for deterministic BFS (so `src/lib/crypto.ts -> src/api/webhooks/stripe.ts` is still 100% captured in the graph), but `truncated_diff` cuts off linearly at 12,000 chars. In `case_030`, ~13 KB of noisy comments in `src/styles/theme.ts` pushed the `crypto.ts` hunk past the token-budget cutoff. Future improvement: prioritize hunks touching high-centrality or sensitive-boundary files first.
+1. **Smart Priority Diff Truncation (`case_030` resolved 29/30 -> 30/30):** `prioritize_and_truncate_diff` scores hunks by sensitive-boundary proximity, graph centrality (`in_degree`), exported signature changes, and non-comment signal before enforcing the 12,000-char token budget. In `case_030`, the buried breaking `src/lib/crypto.ts` hunk is promoted ahead of ~13 KB of noisy comments in `src/styles/theme.ts`; lower-priority noise hunks beyond 12,000 chars are still truncated cleanly to protect prompt cost.
 2. **Computed dynamic imports (`evals/fixtures/mini_edge_cases/src/dynamic/loader.ts`):** Static `import('./plugin')` and `require('./legacy')` resolve deterministically, whereas template-interpolated `import('./plugins/' + name)` cannot be resolved statically without runtime execution (excluded by security policy).
 3. **Depth-0 symbol matching across barrel re-exports:** `BlastRadiusCalculator` computes symbol-overlap matches at depth 0 (`changed_symbols_by_file` against direct importers) and intentionally widens to file-level BFS at hops 1–3 so re-export chains (e.g., `leaf.ts -> sub/index.ts -> barrel/index.ts -> caller.ts`) are never missed.
 4. **Offline vs. Live LLM variance:** This report ran in `deterministic + simulated-llm (offline reproducible; no GEMINI_API_KEY)` mode. Re-run with `GEMINI_API_KEY` set and `--mode live` to benchmark live Gemini Flash responses.

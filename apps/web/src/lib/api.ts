@@ -10,10 +10,18 @@ import {
   GraphResponseSchema,
   RepoIndexResponseSchema,
   RepositoryListSchema,
+  SnapshotDiffResponseSchema,
+  SnapshotListSchema,
   type GraphResponse,
   type RepoIndexResponse,
   type RepositorySummary,
+  type SnapshotDiffResponse,
+  type SnapshotSummary,
 } from "@/lib/schemas/repo";
+import {
+  TelemetrySummaryResponseSchema,
+  type TelemetrySummaryResponse,
+} from "@/lib/schemas/telemetry";
 
 export type HealthCheckResult =
   | { ok: true; data: HealthResponse; latencyMs: number }
@@ -112,11 +120,56 @@ export async function fetchRepositories(options?: {
 
 export async function fetchRepositoryGraph(
   repoId: string,
-  options?: { isServer?: boolean }
+  options?: { isServer?: boolean; snapshotId?: string }
 ): Promise<ApiResult<GraphResponse>> {
+  const qs = options?.snapshotId
+    ? `?snapshot_id=${encodeURIComponent(options.snapshotId)}`
+    : "";
   return requestJson(
-    `/api/repos/${encodeURIComponent(repoId)}/graph`,
+    `/api/repos/${encodeURIComponent(repoId)}/graph${qs}`,
     GraphResponseSchema,
+    { isServer: options?.isServer }
+  );
+}
+
+export async function fetchRepositorySnapshots(
+  repoId: string,
+  options?: { isServer?: boolean }
+): Promise<ApiResult<SnapshotSummary[]>> {
+  return requestJson(
+    `/api/repos/${encodeURIComponent(repoId)}/snapshots`,
+    SnapshotListSchema,
+    { isServer: options?.isServer }
+  );
+}
+
+export async function fetchSnapshotDiff(
+  repoId: string,
+  fromSnapshotId: string,
+  toSnapshotId: string,
+  options?: { isServer?: boolean }
+): Promise<ApiResult<SnapshotDiffResponse>> {
+  const params = new URLSearchParams({
+    from_snapshot_id: fromSnapshotId,
+    to_snapshot_id: toSnapshotId,
+  });
+  return requestJson(
+    `/api/repos/${encodeURIComponent(repoId)}/snapshots/diff?${params.toString()}`,
+    SnapshotDiffResponseSchema,
+    { isServer: options?.isServer }
+  );
+}
+
+export async function fetchTelemetrySummary(options?: {
+  isServer?: boolean;
+  repoId?: string;
+}): Promise<ApiResult<TelemetrySummaryResponse>> {
+  const qs = options?.repoId
+    ? `?repo_id=${encodeURIComponent(options.repoId)}`
+    : "";
+  return requestJson(
+    `/api/telemetry/summary${qs}`,
+    TelemetrySummaryResponseSchema,
     { isServer: options?.isServer }
   );
 }

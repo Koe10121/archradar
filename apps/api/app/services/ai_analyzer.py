@@ -16,8 +16,9 @@ from app.schemas.analysis import (
     BlastRadiusResult,
     CitationValidationTelemetry,
 )
-from app.services.blast_radius import NodeSnapshot
+from app.services.blast_radius import SENSITIVE_BOUNDARY_KEYWORDS, NodeSnapshot
 from app.services.citation_validator import validate_report_citations
+from app.services.github import prioritize_and_truncate_diff
 
 logger = logging.getLogger(__name__)
 
@@ -187,6 +188,31 @@ class AIAnalyzer:
             f"{docs_section}"
         )
 
+    def prepare_diff_for_prompt(
+        self,
+        diff_text: str,
+        nodes: list[NodeSnapshot],
+        blast_radius: BlastRadiusResult,
+        *,
+        max_chars: int = 12_000,
+    ) -> str:
+        """Prioritize diff hunks by in_degree, sensitive boundaries, and signature edits."""
+        in_degree_by_file = {node.path: node.in_degree for node in nodes}
+        sensitive_files: set[str] = set(blast_radius.symbol_matched_files)
+        for edge in blast_radius.impacted_edges:
+            source_tokens = edge.source.lower().replace(".", "/").split("/")
+            if edge.symbol_match or any(
+                tok in SENSITIVE_BOUNDARY_KEYWORDS for tok in source_tokens
+            ):
+                sensitive_files.add(edge.target)
+
+        return prioritize_and_truncate_diff(
+            diff_text,
+            max_chars=max_chars,
+            in_degree_by_file=in_degree_by_file,
+            sensitive_files=sensitive_files,
+        )
+
     async def analyze(
         self,
         *,
@@ -196,14 +222,35 @@ class AIAnalyzer:
         nodes: list[NodeSnapshot],
         blast_radius: BlastRadiusResult,
         doc_context: dict[str, str] | None = None,
+        raw_diff: str | None = None,
+        max_diff_chars: int = 12_000,
     ) -> AIAnalysisExecutionResult:
         """Execute structured AI analysis with 1 schema retry and citation verification."""
         started = time.perf_counter()
+        effective_diff = (
+            self.prepare_diff_for_prompt(
+                raw_diff,
+                nodes,
+                blast_radius,
+                max_chars=max_diff_chars,
+            )
+            if raw_diff is not None
+            else (
+                self.prepare_diff_for_prompt(
+                    truncated_diff,
+                    nodes,
+                    blast_radius,
+                    max_chars=max_diff_chars,
+                )
+                if len(truncated_diff) > max_diff_chars
+                else truncated_diff
+            )
+        )
         subgraph_context = self.build_subgraph_context(nodes, blast_radius)
         base_prompt = self.build_user_prompt(
             pr_title=pr_title,
             pr_description=pr_description,
-            truncated_diff=truncated_diff,
+            truncated_diff=effective_diff,
             subgraph_context=subgraph_context,
             doc_context=doc_context,
         )

@@ -7,9 +7,10 @@ from app.core.config import Settings
 from app.db.session import create_session_factory
 from app.main import create_app
 from app.schemas.analysis import PRAnalysisResponse
-from app.schemas.repo import GraphResponse, RepositorySummary
+from app.schemas.repo import GraphResponse, RepositorySummary, SnapshotSummary
 from app.services.demo_seeder import (
     DEMO_BILLING_REPO_ID,
+    DEMO_BILLING_V1_SNAPSHOT_ID,
     DEMO_FULFILLMENT_REPO_ID,
     seed_demo_data,
 )
@@ -40,7 +41,7 @@ async def test_demo_seeder_idempotency_and_api_endpoints(
     async with session_factory() as session:
         first = await seed_demo_data(session)
         assert first.repos_created == 2
-        assert first.snapshots_created == 2
+        assert first.snapshots_created == 3
         assert first.analyses_created == 3
 
     async with session_factory() as session:
@@ -67,6 +68,20 @@ async def test_demo_seeder_idempotency_and_api_endpoints(
         billing_graph = GraphResponse.model_validate(billing_graph_resp.json())
         assert billing_graph.file_count == 12
         assert billing_graph.edge_count == 14
+
+        snapshots_resp = await client.get(f"/api/repos/{DEMO_BILLING_REPO_ID}/snapshots")
+        assert snapshots_resp.status_code == 200
+        snapshots = [SnapshotSummary.model_validate(item) for item in snapshots_resp.json()]
+        assert [snap.commit_sha for snap in snapshots] == ["4c82d10", "a91f4c2"]
+
+        v1_graph_resp = await client.get(
+            f"/api/repos/{DEMO_BILLING_REPO_ID}/graph",
+            params={"snapshot_id": str(DEMO_BILLING_V1_SNAPSHOT_ID)},
+        )
+        assert v1_graph_resp.status_code == 200
+        v1_graph = GraphResponse.model_validate(v1_graph_resp.json())
+        assert v1_graph.file_count == 9
+        assert v1_graph.edge_count == 9
 
         billing_analyses_resp = await client.get(f"/api/repos/{DEMO_BILLING_REPO_ID}/analyses")
         assert billing_analyses_resp.status_code == 200

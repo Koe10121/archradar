@@ -1,7 +1,7 @@
 # ArchRadar — Living Architecture Mapper & PR Blast-Radius Radar
 
 **Deterministic Tree-sitter AST dependency graphs meet grounded AI risk analysis for Pull Requests.**  
-Instead of asking an LLM to guess how files connect, ArchRadar parses TypeScript/JavaScript and Python repositories into a PostgreSQL dependency graph, computes the exact multi-hop reverse-BFS blast radius, and constrains Gemini structured outputs to verified graph citations.
+Instead of asking an LLM to guess how files connect, ArchRadar parses TypeScript/JavaScript, Python, and Go repositories into a relational dependency graph, computes the exact multi-hop reverse-BFS blast radius, tracks historical snapshot architecture drift, and constrains Gemini structured outputs to verified graph citations.
 
 ![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?logo=fastapi&logoColor=white)
@@ -40,24 +40,24 @@ Instead of asking an LLM to guess how files connect, ArchRadar parses TypeScript
 flowchart TD
     GH["GitHub Repo / PR / HMAC Webhook"] --> API["FastAPI Ingestion & REST API"]
     API -->|"HMAC-SHA256 Check"| WH["Webhook Route (/api/webhooks/github)"]
-    API --> IDX["Tree-sitter AST Indexer (TS, JS, Python)"]
-    IDX -->|"Nodes, Exports, Edges"| DB[("PostgreSQL 16 + SQLAlchemy Async")]
-    API --> DIFF["Unified Diff Parser (unidiff + Path Guard)"]
+    API --> IDX["Tree-sitter AST Indexer (TS, JS, Python, Go)"]
+    IDX -->|"Nodes, Exports, Edges"| DB[("PostgreSQL 16 / SQLite Async")]
+    API --> DIFF["Priority Diff Parser (unidiff + Path Guard)"]
     DIFF --> BFS["Reverse-BFS Blast-Radius Calculator (Depth <= 3)"]
     DB --> BFS
     BFS -->|"Bounded Subgraph + Diff + Docs"| AI["Gemini Structured Analyzer (BlastRadiusReport)"]
     AI --> GATE["Post-LLM Citation Verification Gate"]
-    GATE -->|"Strips Phantom Files"| DB
+    GATE -->|"Strips Phantom Files + Telemetry"| DB
     DB --> WEB["Next.js 15 + React Flow Canvas"]
-    WEB -->|"Dagre Layout & Blast Heatmap"| UI["Node Inspector & Doc-Drift Drawer"]
+    WEB -->|"Dagre Layout, Drift Timeline & Blast Heatmap"| UI["Node Inspector, Drift & Telemetry UI"]
 ```
 
 ### Core Engineering Highlights
-1. **Deterministic-First Graph Engine:** Tree-sitter (`tree-sitter-typescript`, `tree-sitter-javascript`, `tree-sitter-python`) parses source files read-only (never executing target repository code) to extract exported symbols, `tsconfig.json` `@/` path aliases, barrel re-exports (`index.ts`, `__init__.py`), and relative imports.
-2. **Reverse-BFS Blast Radius + Symbol Overlap:** Given modified files and symbols from a unified diff, `BlastRadiusCalculator` traverses reverse dependency edges up to depth 3, scores centrality (`in_degree`), symbol matches, and sensitive boundaries (`auth`, `webhook`, `security`, `billing`, `db`, `middleware`).
-3. **Zero-Phantom Citation Gate:** Every file path cited in `AIAnalyzer` outputs (`entry_file`, `affected_files`) is verified against the repository's indexed `file_nodes` snapshot before persistence. Any unverified path is stripped and logged via `CitationValidationTelemetry`.
-4. **End-to-End Schema Contracts:** Backend outputs validate against strict Pydantic v2 models (`apps/api/app/schemas/`); frontend API boundaries validate every response with Zod (`apps/web/src/lib/schemas/`).
-5. **Webhook & Path Security:** `POST /api/webhooks/github` verifies `X-Hub-Signature-256` with constant-time `hmac.compare_digest` prior to parsing JSON; all file and diff paths are normalized to reject `..`, null bytes, and absolute escapes.
+1. **Deterministic-First Multi-Language Graph Engine:** Tree-sitter (`tree-sitter-typescript`, `tree-sitter-javascript`, `tree-sitter-python`, `tree-sitter-go`) parses source files read-only (never executing target repository code) to extract exported symbols, `tsconfig.json` `@/` path aliases, `go.mod` module-path imports, barrel re-exports (`index.ts`, `__init__.py`), and relative imports.
+2. **Reverse-BFS Blast Radius + Smart Priority Diff Truncation:** Given modified files and symbols from a unified diff, `BlastRadiusCalculator` traverses reverse dependency edges up to depth 3, while `prioritize_and_truncate_diff` ranks hunks by sensitive boundaries, `in_degree` centrality, and exported signature changes before enforcing the 12,000-character token budget.
+3. **Historical Architecture Drift Timeline & Cost Telemetry:** Compare any two indexed snapshots (`GET /api/repos/{id}/snapshots/diff`) with interactive timeline scrubbing and React Flow overlays for added nodes, removed edges, and coupling (`in_degree`) deltas, plus live cost/latency/citation-gate analytics (`GET /api/telemetry/summary`).
+4. **Zero-Phantom Citation Gate:** Every file path cited in `AIAnalyzer` outputs (`entry_file`, `affected_files`) is verified against the repository's indexed `file_nodes` snapshot before persistence. Any unverified path is stripped and logged via `CitationValidationTelemetry`.
+5. **End-to-End Schema Contracts & Security:** Backend outputs validate against strict Pydantic v2 models (`apps/api/app/schemas/`); frontend API boundaries validate every response with Zod (`apps/web/src/lib/schemas/`); `POST /api/webhooks/github` verifies `X-Hub-Signature-256` with constant-time `hmac.compare_digest` prior to parsing JSON.
 
 ---
 
@@ -83,12 +83,13 @@ ArchRadar includes a 30-case golden benchmark suite in [`evals/`](evals/) across
 | Blast-Radius Recall (<= 3 hops) | 100.0% | **100.0%** | PASS |
 | Post-Gate Phantom File Citations | 0.0% | **0.0%** (119 valid / 2 intercepted) | PASS |
 | Subgraph Adherence | >= 95.0% | **100.0%** | PASS |
-| Risk Classification Agreement | >= 85.0% | **96.7%** (29/30 full pass) | PASS |
+| Risk Classification Agreement | >= 85.0% | **100.0%** (30/30 full pass) | PASS |
 | Critical/High Bug False Negative Rate | <= 5.0% | **0.0%** (0/6) | PASS |
-| Breaking-Change Detection Accuracy | >= 85.0% | **96.7%** | PASS |
+| Breaking-Change Detection Accuracy | >= 85.0% | **100.0%** | PASS |
 | Documentation Drift Detection Accuracy | >= 85.0% | **100.0%** | PASS |
-| Deterministic AST + BFS Latency (Median / P95) | < 200 ms | **0.09 ms / 0.16 ms** | PASS |
-| Avg Tokens / PR (Prompt + Completion) | ~4,900 tok | **1,284 + 216 tok** | PASS |
+| Deterministic AST + BFS Latency (Median / P95) | < 200 ms | **0.10 ms / 0.20 ms** | PASS |
+| End-to-End Pipeline Latency (Median / P95) | < 3,000 ms | **0.38 ms / 0.99 ms** | PASS |
+| Avg Tokens / PR (Prompt + Completion) | ~4,900 tok | **1,283 + 216 tok** | PASS |
 
 ### Category Breakdown
 
@@ -98,19 +99,20 @@ ArchRadar includes a 30-case golden benchmark suite in [`evals/`](evals/) across
 | `direct_1hop_break` | 7 | 7/7 | 100.0% | 100.0% | 100.0% | 100.0% |
 | `transitive_break` | 6 | 6/6 | 100.0% | 100.0% | 100.0% | 100.0% |
 | `doc_drift` | 5 | 5/5 | 100.0% | 100.0% | 100.0% | 100.0% |
-| `adversarial_edge` | 5 | 4/5 | 100.0% | 80.0% | 80.0% | 100.0% |
+| `adversarial_edge` | 5 | 5/5 | 100.0% | 100.0% | 100.0% | 100.0% |
 
 ---
 
 ## Known Limitations & Failure Log
 
-We publish failures openly from [`evals/results/latest_report.md`](evals/results/latest_report.md):
+We track benchmark improvements and architectural boundaries openly from [`evals/results/latest_report.md`](evals/results/latest_report.md):
 
-1. **Observed Benchmark Failure — `case_030_adversarial_massive_noisy_diff` (`risk=low`, expected `medium..critical`; `breaking=False`, expected `True`):**  
-   `parse_unified_diff` parses the entire unified diff for deterministic BFS (so `src/lib/crypto.ts -> src/api/webhooks/stripe.ts` still achieved **100% blast-radius recall**), but `truncated_diff` cuts linearly at 12,000 characters. When ~13 KB of noisy comments in `src/styles/theme.ts` preceded `src/lib/crypto.ts`, the breaking hunk fell past the 12k prefix cutoff and the bounded-diff AI analyzer missed it. *Planned fix:* sort diff hunks by `in_degree` and sensitive-boundary priority before applying the 12k char cap.
+1. **Resolved Failure — `case_030_adversarial_massive_noisy_diff` (29/30 → 30/30 full pass):**  
+   - *Before (V1.0 prefix truncation):* `truncated_diff` sliced linearly at 12,000 characters, so ~13 KB of noisy generated comments in `src/styles/theme.ts` pushed the breaking `src/lib/crypto.ts` (`verifyHmacSignature` → `verifyWebhookSignature`) hunk past the cutoff (`risk=low`, `breaking=False`, **29/30 / 96.7%**).  
+   - *After (V1.1 Smart Priority Diff Truncation):* `prioritize_and_truncate_diff` and `AIAnalyzer.prepare_diff_for_prompt` score each hunk by sensitive boundaries, graph `in_degree`, exported signature edits, and non-comment signal before enforcing the 12,000-character budget. `src/lib/crypto.ts` is promoted ahead of comment noise, resolving `case_030` (`risk=high`, `breaking=True`) and lifting the suite to **30/30 (100.0%)** while preserving the \$0.32 / 1,000 PRs token budget.
 2. **Computed Dynamic Imports:** Static `import('./plugin')` and `require('./legacy')` inside functions resolve at 100% accuracy (including after fixing an early-return bug in `TypeScriptAdapter._walk_node` discovered by this benchmark), whereas runtime-computed template imports like ``import(`./plugins/${name}`)`` cannot be resolved statically without executing target code.
 3. **Depth-0 Symbol Matching Across Barrel Re-Exports:** Symbol-overlap precision filtering runs on direct edges at depth 0 (`changed_symbols_by_file`), then widens to file-level BFS at hops 1–3 so barrel chains (`leaf.ts -> sub/index.ts -> index.ts -> caller.ts`) are never dropped.
-4. **Offline Simulator vs. Live Model Variance:** Offline runs use `SimulatedGroundedLLMProvider` over the exact bounded prompt (`user_prompt` JSON subgraph + truncated diff + doc excerpts) to verify prompt-injection resistance, citation stripping (2/2 probes intercepted), and pipeline contracts reproducibly without network calls. Live Gemini numbers vary with model version and temperature.
+4. **Offline Simulator vs. Live Model Variance:** Offline runs use `SimulatedGroundedLLMProvider` over the exact bounded prompt (`user_prompt` JSON subgraph + prioritized diff + doc excerpts) to verify prompt-injection resistance, citation stripping (2/2 probes intercepted), and pipeline contracts reproducibly without network calls. Live Gemini numbers vary with model version and temperature.
 
 ---
 
@@ -120,7 +122,7 @@ At Gemini Flash-class pricing (**\$0.15 / 1M input tokens**, **\$0.60 / 1M outpu
 
 | Approach | Avg Input / PR | Avg Output / PR | Cost / PR | Cost / 1,000 PRs |
 | :--- | ---: | ---: | ---: | ---: |
-| **ArchRadar (Bounded Subgraph + Diff)** — *Measured Benchmark Avg* | 1,284 tok | 216 tok | **\$0.000322** | **\$0.32** |
+| **ArchRadar (Bounded Subgraph + Diff)** — *Measured Benchmark Avg* | 1,283 tok | 216 tok | **\$0.000322** | **\$0.32** |
 | **ArchRadar (Larger PR Budget)** — *PRD Upper Estimate* | 4,000 tok | 900 tok | **\$0.001140** | **\$1.14** |
 | **Naive Full-Repo Prompting** — *~150k token codebase context* | 150,000 tok | 1,000 tok | \$0.023100 | \$23.10 |
 

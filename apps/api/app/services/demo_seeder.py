@@ -24,11 +24,13 @@ from app.services.citation_validator import validate_report_citations
 logger = logging.getLogger(__name__)
 
 DEMO_BILLING_REPO_ID = UUID("00000000-0000-0000-0000-000000000042")
+DEMO_BILLING_V1_SNAPSHOT_ID = UUID("00000000-0000-0000-0000-000000000100")
 DEMO_BILLING_SNAPSHOT_ID = UUID("00000000-0000-0000-0000-000000000101")
 DEMO_FULFILLMENT_REPO_ID = UUID("00000000-0000-0000-0000-000000000051")
 DEMO_FULFILLMENT_SNAPSHOT_ID = UUID("00000000-0000-0000-0000-000000000201")
 
 _DEMO_NAMESPACE = UUID("8b8b1a24-0f32-4e77-9e6a-0f1b9c6e4d12")
+_BASE_TS = datetime(2026, 11, 26, 8, 30, tzinfo=UTC)
 
 
 @dataclass(frozen=True)
@@ -53,18 +55,46 @@ class DemoEdgeSpec:
 
 
 @dataclass(frozen=True)
+class DemoSnapshotSpec:
+    """Point-in-time snapshot specification inside a demo repository."""
+
+    snapshot_id: UUID
+    commit_sha: str
+    created_at: datetime
+    nodes: list[DemoNodeSpec]
+    edges: list[DemoEdgeSpec]
+
+
+@dataclass(frozen=True)
 class DemoRepoSpec:
-    """Complete pre-indexed demo repository specification."""
+    """Complete pre-indexed demo repository specification (ordered snapshots)."""
 
     repo_id: UUID
-    snapshot_id: UUID
     owner: str
     name: str
     url: str
     default_branch: str
-    commit_sha: str
-    nodes: list[DemoNodeSpec]
-    edges: list[DemoEdgeSpec]
+    snapshots: tuple[DemoSnapshotSpec, ...]
+
+    @property
+    def latest_snapshot(self) -> DemoSnapshotSpec:
+        return self.snapshots[-1]
+
+    @property
+    def snapshot_id(self) -> UUID:
+        return self.latest_snapshot.snapshot_id
+
+    @property
+    def commit_sha(self) -> str:
+        return self.latest_snapshot.commit_sha
+
+    @property
+    def nodes(self) -> list[DemoNodeSpec]:
+        return self.latest_snapshot.nodes
+
+    @property
+    def edges(self) -> list[DemoEdgeSpec]:
+        return self.latest_snapshot.edges
 
 
 @dataclass(frozen=True)
@@ -100,14 +130,189 @@ def _export(name: str, kind: str, signature: str) -> dict[str, object]:
     return {"name": name, "kind": kind, "signature": signature}
 
 
-BILLING_DEMO_REPO = DemoRepoSpec(
-    repo_id=DEMO_BILLING_REPO_ID,
+_BILLING_V1_SNAPSHOT = DemoSnapshotSpec(
+    snapshot_id=DEMO_BILLING_V1_SNAPSHOT_ID,
+    commit_sha="4c82d10",
+    created_at=_BASE_TS - timedelta(days=14),
+    nodes=[
+        DemoNodeSpec(
+            path="src/lib/token.ts",
+            language="typescript",
+            module_group="src/lib",
+            loc=84,
+            exports=[
+                _export(
+                    "verifyToken",
+                    "function",
+                    "export function verifyToken(token: string): SessionClaims",
+                ),
+                _export(
+                    "signSessionToken",
+                    "function",
+                    "export function signSessionToken(userId: string): string",
+                ),
+            ],
+        ),
+        DemoNodeSpec(
+            path="src/lib/formatters.ts",
+            language="typescript",
+            module_group="src/lib",
+            loc=36,
+            exports=[
+                _export(
+                    "formatUsdCents",
+                    "function",
+                    "export function formatUsdCents(cents: number): string",
+                ),
+            ],
+        ),
+        DemoNodeSpec(
+            path="src/lib/legacyBillingClient.ts",
+            language="typescript",
+            module_group="src/lib",
+            loc=52,
+            exports=[
+                _export(
+                    "postLegacyCharge",
+                    "function",
+                    "export async function postLegacyCharge(amount: number): Promise<void>",
+                ),
+            ],
+        ),
+        DemoNodeSpec(
+            path="src/middleware/auth.ts",
+            language="typescript",
+            module_group="src/middleware",
+            loc=72,
+            exports=[
+                _export(
+                    "requireAuth",
+                    "function",
+                    "export async function requireAuth(req: Request): Promise<AuthContext>",
+                ),
+            ],
+        ),
+        DemoNodeSpec(
+            path="src/services/session.ts",
+            language="typescript",
+            module_group="src/services",
+            loc=74,
+            exports=[
+                _export(
+                    "refreshSession",
+                    "function",
+                    "export async function refreshSession(token: string): Promise<SessionResult>",
+                ),
+            ],
+        ),
+        DemoNodeSpec(
+            path="src/services/billing.ts",
+            language="typescript",
+            module_group="src/services",
+            loc=124,
+            exports=[
+                _export(
+                    "chargeSubscription",
+                    "function",
+                    "export async function chargeSubscription(ctx: AuthContext, planId: string)"
+                    ": Promise<Invoice>",
+                ),
+                _export(
+                    "syncSubscriptionState",
+                    "function",
+                    "export async function syncSubscriptionState(customerId: string)"
+                    ": Promise<void>",
+                ),
+            ],
+        ),
+        DemoNodeSpec(
+            path="src/api/routes/checkout.ts",
+            language="typescript",
+            module_group="src/api",
+            loc=92,
+            exports=[
+                _export(
+                    "postCheckout",
+                    "function",
+                    "export async function postCheckout(req: Request): Promise<Response>",
+                ),
+            ],
+        ),
+        DemoNodeSpec(
+            path="src/api/webhooks/stripe.ts",
+            language="typescript",
+            module_group="src/api",
+            loc=86,
+            exports=[
+                _export(
+                    "handleStripeWebhook",
+                    "function",
+                    "export async function handleStripeWebhook(req: Request): Promise<Response>",
+                ),
+            ],
+        ),
+        DemoNodeSpec(
+            path="src/ui/BillingSummary.tsx",
+            language="typescript",
+            module_group="src/ui",
+            loc=84,
+            exports=[
+                _export(
+                    "BillingSummary",
+                    "function",
+                    "export function BillingSummary({ cents }: BillingSummaryProps): JSX.Element",
+                ),
+            ],
+        ),
+    ],
+    edges=[
+        DemoEdgeSpec("src/middleware/auth.ts", "src/lib/token.ts", "import", ["verifyToken"]),
+        DemoEdgeSpec(
+            "src/services/session.ts",
+            "src/lib/token.ts",
+            "import",
+            ["verifyToken", "signSessionToken"],
+        ),
+        DemoEdgeSpec(
+            "src/services/billing.ts", "src/middleware/auth.ts", "import", ["requireAuth"]
+        ),
+        DemoEdgeSpec(
+            "src/services/billing.ts",
+            "src/lib/legacyBillingClient.ts",
+            "import",
+            ["postLegacyCharge"],
+        ),
+        DemoEdgeSpec(
+            "src/api/routes/checkout.ts",
+            "src/middleware/auth.ts",
+            "import",
+            ["requireAuth"],
+        ),
+        DemoEdgeSpec(
+            "src/api/routes/checkout.ts",
+            "src/services/billing.ts",
+            "import",
+            ["chargeSubscription"],
+        ),
+        DemoEdgeSpec(
+            "src/api/webhooks/stripe.ts",
+            "src/services/billing.ts",
+            "import",
+            ["syncSubscriptionState"],
+        ),
+        DemoEdgeSpec(
+            "src/ui/BillingSummary.tsx", "src/lib/formatters.ts", "import", ["formatUsdCents"]
+        ),
+        DemoEdgeSpec(
+            "src/ui/BillingSummary.tsx", "src/middleware/auth.ts", "import", ["requireAuth"]
+        ),
+    ],
+)
+
+_BILLING_V2_SNAPSHOT = DemoSnapshotSpec(
     snapshot_id=DEMO_BILLING_SNAPSHOT_ID,
-    owner="acme",
-    name="saas-billing-platform",
-    url="https://github.com/acme/saas-billing-platform",
-    default_branch="main",
     commit_sha="a91f4c2",
+    created_at=_BASE_TS - timedelta(hours=2),
     nodes=[
         DemoNodeSpec(
             path="src/lib/token.ts",
@@ -351,15 +556,27 @@ BILLING_DEMO_REPO = DemoRepoSpec(
     ],
 )
 
+BILLING_DEMO_REPO = DemoRepoSpec(
+    repo_id=DEMO_BILLING_REPO_ID,
+    owner="acme",
+    name="saas-billing-platform",
+    url="https://github.com/acme/saas-billing-platform",
+    default_branch="main",
+    snapshots=(_BILLING_V1_SNAPSHOT, _BILLING_V2_SNAPSHOT),
+)
+
 FULFILLMENT_DEMO_REPO = DemoRepoSpec(
     repo_id=DEMO_FULFILLMENT_REPO_ID,
-    snapshot_id=DEMO_FULFILLMENT_SNAPSHOT_ID,
     owner="acme",
     name="order-fulfillment-api",
     url="https://github.com/acme/order-fulfillment-api",
     default_branch="main",
-    commit_sha="d47e81b",
-    nodes=[
+    snapshots=(
+        DemoSnapshotSpec(
+            snapshot_id=DEMO_FULFILLMENT_SNAPSHOT_ID,
+            commit_sha="d47e81b",
+            created_at=_BASE_TS - timedelta(hours=1),
+            nodes=[
         DemoNodeSpec(
             path="app/core/config.py",
             language="python",
@@ -589,11 +806,11 @@ FULFILLMENT_DEMO_REPO = DemoRepoSpec(
             ["process_shipping_event"],
         ),
     ],
+        ),
+    ),
 )
 
 DEMO_REPOS: tuple[DemoRepoSpec, ...] = (BILLING_DEMO_REPO, FULFILLMENT_DEMO_REPO)
-
-_BASE_TS = datetime(2026, 11, 26, 8, 30, tzinfo=UTC)
 
 DEMO_PR_SCENARIOS: tuple[DemoPRSpec, ...] = (
     DemoPRSpec(
@@ -802,17 +1019,19 @@ DEMO_PR_SCENARIOS: tuple[DemoPRSpec, ...] = (
 )
 
 
-def _compute_degrees(repo: DemoRepoSpec) -> tuple[dict[str, int], dict[str, int]]:
-    in_degree = {node.path: 0 for node in repo.nodes}
-    out_degree = {node.path: 0 for node in repo.nodes}
-    for edge in repo.edges:
+def _compute_degrees(
+    snap: DemoSnapshotSpec,
+) -> tuple[dict[str, int], dict[str, int]]:
+    in_degree = {node.path: 0 for node in snap.nodes}
+    out_degree = {node.path: 0 for node in snap.nodes}
+    for edge in snap.edges:
         out_degree[edge.source_path] += 1
         in_degree[edge.target_path] += 1
     return in_degree, out_degree
 
 
-def _to_snapshots(repo: DemoRepoSpec) -> tuple[list[NodeSnapshot], list[EdgeSnapshot]]:
-    in_degree, out_degree = _compute_degrees(repo)
+def _to_snapshots(snap: DemoSnapshotSpec) -> tuple[list[NodeSnapshot], list[EdgeSnapshot]]:
+    in_degree, out_degree = _compute_degrees(snap)
     nodes = [
         NodeSnapshot(
             path=node.path,
@@ -823,7 +1042,7 @@ def _to_snapshots(repo: DemoRepoSpec) -> tuple[list[NodeSnapshot], list[EdgeSnap
             out_degree=out_degree[node.path],
             exports=list(node.exports),
         )
-        for node in repo.nodes
+        for node in snap.nodes
     ]
     edges = [
         EdgeSnapshot(
@@ -832,7 +1051,7 @@ def _to_snapshots(repo: DemoRepoSpec) -> tuple[list[NodeSnapshot], list[EdgeSnap
             edge_type=edge.edge_type,
             imported_symbols=list(edge.imported_symbols),
         )
-        for edge in repo.edges
+        for edge in snap.edges
     ]
     return nodes, edges
 
@@ -871,65 +1090,73 @@ async def seed_demo_data(session: AsyncSession) -> DemoSeedSummary:
 
         resolved_repo_id_by_spec_id[spec.repo_id] = repo.id
 
-        snap_res = await session.execute(
-            select(GraphSnapshot)
-            .where(GraphSnapshot.repository_id == repo.id, GraphSnapshot.status == "ready")
-            .limit(1)
-        )
-        snapshot = snap_res.scalar_one_or_none()
-        if snapshot is None:
-            in_degree, out_degree = _compute_degrees(spec)
-            snapshot = GraphSnapshot(
-                id=spec.snapshot_id,
-                repository_id=repo.id,
-                commit_sha=spec.commit_sha,
-                file_count=len(spec.nodes),
-                edge_count=len(spec.edges),
-                status="ready",
+        latest_snapshot_id: UUID | None = None
+        for snap_spec in spec.snapshots:
+            snap_res = await session.execute(
+                select(GraphSnapshot).where(
+                    GraphSnapshot.repository_id == repo.id,
+                    GraphSnapshot.commit_sha == snap_spec.commit_sha,
+                    GraphSnapshot.status == "ready",
+                )
             )
-            session.add(snapshot)
-            await session.flush()
-            snapshots_created += 1
+            snapshot = snap_res.scalar_one_or_none()
+            if snapshot is None:
+                in_degree, out_degree = _compute_degrees(snap_spec)
+                snapshot = GraphSnapshot(
+                    id=snap_spec.snapshot_id,
+                    repository_id=repo.id,
+                    commit_sha=snap_spec.commit_sha,
+                    file_count=len(snap_spec.nodes),
+                    edge_count=len(snap_spec.edges),
+                    status="ready",
+                    created_at=snap_spec.created_at,
+                )
+                session.add(snapshot)
+                await session.flush()
+                snapshots_created += 1
 
-            node_id_by_path: dict[str, UUID] = {}
-            for node_spec in spec.nodes:
-                node_id = uuid5(_DEMO_NAMESPACE, f"{spec.snapshot_id}:{node_spec.path}")
-                node_id_by_path[node_spec.path] = node_id
-                session.add(
-                    FileNode(
-                        id=node_id,
-                        snapshot_id=snapshot.id,
-                        path=node_spec.path,
-                        language=node_spec.language,
-                        module_group=node_spec.module_group,
-                        loc=node_spec.loc,
-                        exports_json=list(node_spec.exports),
-                        in_degree=in_degree[node_spec.path],
-                        out_degree=out_degree[node_spec.path],
+                node_id_by_path: dict[str, UUID] = {}
+                for node_spec in snap_spec.nodes:
+                    node_id = uuid5(_DEMO_NAMESPACE, f"{snap_spec.snapshot_id}:{node_spec.path}")
+                    node_id_by_path[node_spec.path] = node_id
+                    session.add(
+                        FileNode(
+                            id=node_id,
+                            snapshot_id=snapshot.id,
+                            path=node_spec.path,
+                            language=node_spec.language,
+                            module_group=node_spec.module_group,
+                            loc=node_spec.loc,
+                            exports_json=list(node_spec.exports),
+                            in_degree=in_degree[node_spec.path],
+                            out_degree=out_degree[node_spec.path],
+                        )
                     )
-                )
-            await session.flush()
+                await session.flush()
 
-            for idx, edge_spec in enumerate(spec.edges):
-                edge_id = uuid5(
-                    _DEMO_NAMESPACE,
-                    f"{spec.snapshot_id}:edge:{idx}:{edge_spec.source_path}->{edge_spec.target_path}",
-                )
-                session.add(
-                    DependencyEdge(
-                        id=edge_id,
-                        snapshot_id=snapshot.id,
-                        source_node_id=node_id_by_path[edge_spec.source_path],
-                        target_node_id=node_id_by_path[edge_spec.target_path],
-                        edge_type=edge_spec.edge_type,
-                        imported_symbols=list(edge_spec.imported_symbols),
+                for idx, edge_spec in enumerate(snap_spec.edges):
+                    edge_id = uuid5(
+                        _DEMO_NAMESPACE,
+                        f"{snap_spec.snapshot_id}:edge:{idx}:"
+                        f"{edge_spec.source_path}->{edge_spec.target_path}",
                     )
-                )
+                    session.add(
+                        DependencyEdge(
+                            id=edge_id,
+                            snapshot_id=snapshot.id,
+                            source_node_id=node_id_by_path[edge_spec.source_path],
+                            target_node_id=node_id_by_path[edge_spec.target_path],
+                            edge_type=edge_spec.edge_type,
+                            imported_symbols=list(edge_spec.imported_symbols),
+                        )
+                    )
+            latest_snapshot_id = snapshot.id
 
-        snapshot_id_by_repo_id[spec.repo_id] = snapshot.id
+        assert latest_snapshot_id is not None
+        snapshot_id_by_repo_id[spec.repo_id] = latest_snapshot_id
 
     calculator = BlastRadiusCalculator()
-    snapshots_cache = {spec.repo_id: _to_snapshots(spec) for spec in DEMO_REPOS}
+    snapshots_cache = {spec.repo_id: _to_snapshots(spec.latest_snapshot) for spec in DEMO_REPOS}
 
     for pr_spec in DEMO_PR_SCENARIOS:
         target_repo_id = resolved_repo_id_by_spec_id[pr_spec.repo_id]
@@ -969,6 +1196,7 @@ async def seed_demo_data(session: AsyncSession) -> DemoSeedSummary:
                 changed_files=list(pr_spec.changed_files),
                 blast_radius_json=blast_radius.model_dump(),
                 ai_report_json=verified_report.model_dump(),
+                citation_telemetry_json=telemetry.model_dump(),
                 model_used=pr_spec.model_used,
                 prompt_tokens=pr_spec.prompt_tokens,
                 completion_tokens=pr_spec.completion_tokens,

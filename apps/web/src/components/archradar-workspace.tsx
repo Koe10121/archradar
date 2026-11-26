@@ -3,8 +3,10 @@
 import { useMemo, useState } from "react";
 import {
   Activity,
+  BarChart3,
   FolderGit2,
   GitPullRequest,
+  History,
   Layers,
   Radar,
   Search,
@@ -13,33 +15,46 @@ import {
 
 import { AnalyzePRModal } from "@/components/analyze-pr-modal";
 import { BlastRadiusPanel } from "@/components/blast-radius-panel";
+import { DriftTimelinePanel } from "@/components/drift-timeline-panel";
 import { ArchitectureCanvas } from "@/components/graph/architecture-canvas";
 import { IndexRepoModal } from "@/components/index-repo-modal";
 import { NodeInspectorDrawer } from "@/components/node-inspector-drawer";
+import { TelemetryModal } from "@/components/telemetry-modal";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   fetchRepositories,
   fetchRepositoryAnalyses,
   fetchRepositoryGraph,
+  fetchRepositorySnapshots,
+  fetchSnapshotDiff,
   type HealthCheckResult,
 } from "@/lib/api";
 import {
+  computeDemoSnapshotDiff,
   DEMO_BILLING_GRAPH,
   DEMO_BILLING_REPO_ID,
   DEMO_GRAPHS_BY_REPO_ID,
+  DEMO_GRAPHS_BY_SNAPSHOT_ID,
   DEMO_PR_SCENARIOS,
   DEMO_REPOSITORIES,
   DEMO_REPOSITORY,
+  DEMO_SNAPSHOTS_BY_REPO_ID,
 } from "@/lib/demo-data";
 import { type PRAnalysisResponse } from "@/lib/schemas/analysis";
-import { type GraphResponse, type RepositorySummary } from "@/lib/schemas/repo";
+import {
+  type GraphResponse,
+  type RepositorySummary,
+  type SnapshotDiffResponse,
+  type SnapshotSummary,
+} from "@/lib/schemas/repo";
 
 interface ArchRadarWorkspaceProps {
   initialHealth: HealthCheckResult;
   initialRepos: RepositorySummary[];
   initialGraph: GraphResponse | null;
   initialAnalyses?: PRAnalysisResponse[];
+  initialSnapshots?: SnapshotSummary[];
 }
 
 const SCENARIO_BUTTONS: ReadonlyArray<{
@@ -57,12 +72,33 @@ export function ArchRadarWorkspace({
   initialRepos,
   initialGraph,
   initialAnalyses = [],
+  initialSnapshots = [],
 }: ArchRadarWorkspaceProps): React.JSX.Element {
+  const initialSnapshotList =
+    initialGraph === null
+      ? (DEMO_SNAPSHOTS_BY_REPO_ID[DEMO_BILLING_REPO_ID] ?? [])
+      : initialSnapshots;
+  const latestInitialSnap = initialSnapshotList[initialSnapshotList.length - 1];
+  const prevInitialSnap =
+    initialSnapshotList.length >= 2
+      ? initialSnapshotList[initialSnapshotList.length - 2]
+      : latestInitialSnap;
+
   const [liveRepos, setLiveRepos] = useState<RepositorySummary[]>(initialRepos);
   const [activeRepoId, setActiveRepoId] = useState<string>(
     initialGraph?.repository_id ?? DEMO_BILLING_REPO_ID
   );
   const [graph, setGraph] = useState<GraphResponse>(initialGraph ?? DEMO_BILLING_GRAPH);
+  const [snapshots, setSnapshots] = useState<SnapshotSummary[]>(initialSnapshotList);
+  const [selectedSnapshotId, setSelectedSnapshotId] = useState<string>(
+    initialGraph?.snapshot_id ?? latestInitialSnap?.id ?? ""
+  );
+  const [fromSnapshotId, setFromSnapshotId] = useState<string>(prevInitialSnap?.id ?? "");
+  const [toSnapshotId, setToSnapshotId] = useState<string>(latestInitialSnap?.id ?? "");
+  const [snapshotDiff, setSnapshotDiff] = useState<SnapshotDiffResponse | null>(null);
+  const [driftOverlayActive, setDriftOverlayActive] = useState<boolean>(false);
+  const [driftLoading, setDriftLoading] = useState<boolean>(false);
+  const [driftError, setDriftError] = useState<string | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [activeAnalysis, setActiveAnalysis] = useState<PRAnalysisResponse | null>(
     initialGraph ? (initialAnalyses[0] ?? null) : (DEMO_PR_SCENARIOS[0] ?? null)
@@ -70,12 +106,13 @@ export function ArchRadarWorkspace({
   const [blastOverlayActive, setBlastOverlayActive] = useState<boolean>(
     initialGraph ? initialAnalyses.length > 0 : true
   );
-  const [activeTab, setActiveTab] = useState<"blast" | "inspector">("blast");
+  const [activeTab, setActiveTab] = useState<"blast" | "drift" | "inspector">("blast");
   const [searchQuery, setSearchQuery] = useState("");
   const [focusedPaths, setFocusedPaths] = useState<string[]>([]);
   const [focusTrigger, setFocusTrigger] = useState(0);
   const [analyzeOpen, setAnalyzeOpen] = useState(false);
   const [indexOpen, setIndexOpen] = useState(false);
+  const [telemetryOpen, setTelemetryOpen] = useState(false);
   const [statusError, setStatusError] = useState<string | null>(null);
 
   const backendRepoIds = useMemo(
@@ -125,25 +162,87 @@ export function ArchRadarWorkspace({
     ).length;
   }, [graph.nodes, searchQuery]);
 
+  async function loadSnapshotDiff(
+    repoId: string,
+    fromId: string,
+    toId: string,
+    snapList: SnapshotSummary[],
+    offlineMode: boolean
+  ): Promise<void> {
+    if (!fromId || !toId) {
+      setSnapshotDiff(null);
+      return;
+    }
+    setDriftError(null);
+    if (offlineMode) {
+      const fromSnap = snapList.find((s) => s.id === fromId);
+      const toSnap = snapList.find((s) => s.id === toId);
+      const fromGraph = DEMO_GRAPHS_BY_SNAPSHOT_ID[fromId];
+      const toGraph = DEMO_GRAPHS_BY_SNAPSHOT_ID[toId];
+      if (fromSnap && toSnap && fromGraph && toGraph) {
+        setSnapshotDiff(computeDemoSnapshotDiff(fromSnap, toSnap, fromGraph, toGraph));
+      } else {
+        setSnapshotDiff(null);
+      }
+      return;
+    }
+
+    setDriftLoading(true);
+    const diffRes = await fetchSnapshotDiff(repoId, fromId, toId);
+    setDriftLoading(false);
+    if (!diffRes.ok) {
+      setDriftError(diffRes.error);
+      return;
+    }
+    setSnapshotDiff(diffRes.data);
+  }
+
+  function applySnapshotState(
+    nextRepoId: string,
+    nextSnaps: SnapshotSummary[],
+    currentSnapshotId: string
+  ): { fromId: string; toId: string } {
+    setSnapshots(nextSnaps);
+    setSelectedSnapshotId(currentSnapshotId);
+    const latest = nextSnaps[nextSnaps.length - 1];
+    const prev = nextSnaps.length >= 2 ? nextSnaps[nextSnaps.length - 2] : latest;
+    const fromId = prev?.id ?? "";
+    const toId = latest?.id ?? "";
+    setFromSnapshotId(fromId);
+    setToSnapshotId(toId);
+    setSnapshotDiff(null);
+    setDriftError(null);
+    if (nextSnaps.length < 2 || !fromId || !toId) {
+      setDriftOverlayActive(false);
+    } else if (activeTab === "drift") {
+      void loadSnapshotDiff(nextRepoId, fromId, toId, nextSnaps, !backendRepoIds.has(nextRepoId));
+    }
+    return { fromId, toId };
+  }
+
   async function handleSelectRepo(nextRepoId: string): Promise<void> {
     setStatusError(null);
     setSelectedNodeId(null);
 
     if (!backendRepoIds.has(nextRepoId)) {
       const offlineGraph = DEMO_GRAPHS_BY_REPO_ID[nextRepoId] ?? DEMO_BILLING_GRAPH;
+      const offlineSnaps = DEMO_SNAPSHOTS_BY_REPO_ID[nextRepoId] ?? [];
       const defaultScenario =
         DEMO_PR_SCENARIOS.find((s) => s.repository_id === nextRepoId) ?? null;
       setActiveRepoId(nextRepoId);
       setGraph(offlineGraph);
       setActiveAnalysis(defaultScenario);
       setBlastOverlayActive(defaultScenario !== null);
+      setDriftOverlayActive(false);
+      applySnapshotState(nextRepoId, offlineSnaps, offlineGraph.snapshot_id);
       setActiveTab("blast");
       return;
     }
 
-    const [graphRes, analysesRes] = await Promise.all([
+    const [graphRes, analysesRes, snapsRes] = await Promise.all([
       fetchRepositoryGraph(nextRepoId),
       fetchRepositoryAnalyses(nextRepoId),
+      fetchRepositorySnapshots(nextRepoId),
     ]);
     if (!graphRes.ok) {
       setStatusError(`Failed to load repository graph: ${graphRes.error}`);
@@ -151,18 +250,22 @@ export function ArchRadarWorkspace({
     }
     const latestAnalysis =
       analysesRes.ok && analysesRes.data.length > 0 ? (analysesRes.data[0] ?? null) : null;
+    const nextSnaps = snapsRes.ok ? snapsRes.data : [];
     setActiveRepoId(nextRepoId);
     setGraph(graphRes.data);
     setActiveAnalysis(latestAnalysis);
     setBlastOverlayActive(latestAnalysis !== null);
+    setDriftOverlayActive(false);
+    applySnapshotState(nextRepoId, nextSnaps, graphRes.data.snapshot_id);
     setActiveTab("blast");
   }
 
   async function handleRepoIndexed(repositoryId: string): Promise<void> {
-    const [reposRes, graphRes, analysesRes] = await Promise.all([
+    const [reposRes, graphRes, analysesRes, snapsRes] = await Promise.all([
       fetchRepositories(),
       fetchRepositoryGraph(repositoryId),
       fetchRepositoryAnalyses(repositoryId),
+      fetchRepositorySnapshots(repositoryId),
     ]);
     if (reposRes.ok) {
       setLiveRepos(reposRes.data);
@@ -170,14 +273,71 @@ export function ArchRadarWorkspace({
     if (graphRes.ok) {
       const latestAnalysis =
         analysesRes.ok && analysesRes.data.length > 0 ? (analysesRes.data[0] ?? null) : null;
+      const nextSnaps = snapsRes.ok ? snapsRes.data : [];
       setActiveRepoId(repositoryId);
       setGraph(graphRes.data);
       setActiveAnalysis(latestAnalysis);
       setBlastOverlayActive(latestAnalysis !== null);
+      setDriftOverlayActive(false);
+      setSnapshots(nextSnaps);
+      setSelectedSnapshotId(graphRes.data.snapshot_id);
+      const latest = nextSnaps[nextSnaps.length - 1];
+      const prev = nextSnaps.length >= 2 ? nextSnaps[nextSnaps.length - 2] : latest;
+      setFromSnapshotId(prev?.id ?? "");
+      setToSnapshotId(latest?.id ?? "");
+      setSnapshotDiff(null);
       setSelectedNodeId(null);
     } else {
       setStatusError(graphRes.error);
     }
+  }
+
+  async function handleOpenDriftTab(): Promise<void> {
+    setActiveTab("drift");
+    setBlastOverlayActive(false);
+    if (snapshots.length >= 2) {
+      setDriftOverlayActive(true);
+      if (!snapshotDiff && fromSnapshotId && toSnapshotId) {
+        await loadSnapshotDiff(activeRepoId, fromSnapshotId, toSnapshotId, snapshots, isOfflineDemo);
+      }
+    }
+  }
+
+  async function handleScrubSnapshot(snapshotId: string): Promise<void> {
+    setStatusError(null);
+    setSelectedNodeId(null);
+    setBlastOverlayActive(false);
+
+    if (isOfflineDemo) {
+      const offlineGraph = DEMO_GRAPHS_BY_SNAPSHOT_ID[snapshotId];
+      if (offlineGraph) {
+        setGraph(offlineGraph);
+        setSelectedSnapshotId(snapshotId);
+      }
+    } else {
+      const graphRes = await fetchRepositoryGraph(activeRepoId, { snapshotId });
+      if (!graphRes.ok) {
+        setDriftError(graphRes.error);
+        return;
+      }
+      setGraph(graphRes.data);
+      setSelectedSnapshotId(snapshotId);
+    }
+
+    if (snapshots.length >= 2) {
+      setDriftOverlayActive(true);
+      if (!snapshotDiff && fromSnapshotId && toSnapshotId) {
+        await loadSnapshotDiff(activeRepoId, fromSnapshotId, toSnapshotId, snapshots, isOfflineDemo);
+      }
+    }
+  }
+
+  async function handleChangeDriftRange(nextFromId: string, nextToId: string): Promise<void> {
+    setFromSnapshotId(nextFromId);
+    setToSnapshotId(nextToId);
+    setBlastOverlayActive(false);
+    setDriftOverlayActive(true);
+    await loadSnapshotDiff(activeRepoId, nextFromId, nextToId, snapshots, isOfflineDemo);
   }
 
   function handleSelectNode(nodeId: string | null): void {
@@ -215,21 +375,25 @@ export function ArchRadarWorkspace({
       : undefined;
 
     if (matchedLiveRepo) {
-      const [graphRes, analysesRes] = await Promise.all([
-        activeRepoId === matchedLiveRepo.id
+      const [graphRes, analysesRes, snapsRes] = await Promise.all([
+        activeRepoId === matchedLiveRepo.id && graph.snapshot_id === matchedLiveRepo.latest_snapshot_id
           ? Promise.resolve({ ok: true as const, data: graph })
           : fetchRepositoryGraph(matchedLiveRepo.id),
         fetchRepositoryAnalyses(matchedLiveRepo.id),
+        fetchRepositorySnapshots(matchedLiveRepo.id),
       ]);
       if (graphRes.ok) {
         const matchedAnalysis = analysesRes.ok
           ? analysesRes.data.find((a) => a.pr_number === scenario.pr_number)
           : undefined;
         const resolvedAnalysis = matchedAnalysis ?? scenario;
+        const nextSnaps = snapsRes.ok ? snapsRes.data : [];
         setActiveRepoId(matchedLiveRepo.id);
         setGraph(graphRes.data);
         setActiveAnalysis(resolvedAnalysis);
         setBlastOverlayActive(true);
+        setDriftOverlayActive(false);
+        applySnapshotState(matchedLiveRepo.id, nextSnaps, graphRes.data.snapshot_id);
         setActiveTab("blast");
         handleFocusPaths([
           ...resolvedAnalysis.blast_radius.direct,
@@ -241,10 +405,13 @@ export function ArchRadarWorkspace({
 
     const offlineGraph =
       DEMO_GRAPHS_BY_REPO_ID[scenario.repository_id] ?? DEMO_BILLING_GRAPH;
+    const offlineSnaps = DEMO_SNAPSHOTS_BY_REPO_ID[scenario.repository_id] ?? [];
     setActiveRepoId(scenario.repository_id);
     setGraph(offlineGraph);
     setActiveAnalysis(scenario);
     setBlastOverlayActive(true);
+    setDriftOverlayActive(false);
+    applySnapshotState(scenario.repository_id, offlineSnaps, offlineGraph.snapshot_id);
     setActiveTab("blast");
     handleFocusPaths([
       ...scenario.blast_radius.direct,
@@ -326,6 +493,24 @@ export function ArchRadarWorkspace({
 
           <Button
             size="sm"
+            variant="outline"
+            className="h-8 text-xs"
+            onClick={() => setTelemetryOpen(true)}
+          >
+            <BarChart3 className="h-3.5 w-3.5 text-emerald-400" />
+            Telemetry
+          </Button>
+          <Button
+            size="sm"
+            variant={activeTab === "drift" && driftOverlayActive ? "default" : "outline"}
+            className="h-8 text-xs"
+            onClick={() => void handleOpenDriftTab()}
+          >
+            <History className="h-3.5 w-3.5 text-emerald-400" />
+            Drift Timeline
+          </Button>
+          <Button
+            size="sm"
             variant="secondary"
             className="h-8 text-xs"
             onClick={() => void handleSimulateDemoPR(0)}
@@ -367,6 +552,8 @@ export function ArchRadarWorkspace({
             onSelectNode={handleSelectNode}
             blastRadius={activeAnalysis?.blast_radius ?? null}
             blastOverlayActive={blastOverlayActive}
+            snapshotDiff={snapshotDiff}
+            driftOverlayActive={driftOverlayActive}
             searchQuery={searchQuery}
             focusedPaths={focusedPaths}
             focusTrigger={focusTrigger}
@@ -375,11 +562,16 @@ export function ArchRadarWorkspace({
 
         <aside className="flex flex-col overflow-hidden rounded-xl border border-border bg-card lg:h-[calc(100vh-6.25rem)]">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2">
-            <div className="flex gap-1.5">
+            <div className="flex gap-1">
               <button
                 type="button"
-                onClick={() => setActiveTab("blast")}
-                className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
+                onClick={() => {
+                  setActiveTab("blast");
+                  if (activeAnalysis) {
+                    setDriftOverlayActive(false);
+                  }
+                }}
+                className={`rounded-md px-2 py-1 text-xs font-medium transition ${
                   activeTab === "blast"
                     ? "bg-primary text-primary-foreground"
                     : "text-muted-foreground hover:bg-secondary"
@@ -389,14 +581,25 @@ export function ArchRadarWorkspace({
               </button>
               <button
                 type="button"
+                onClick={() => void handleOpenDriftTab()}
+                className={`rounded-md px-2 py-1 text-xs font-medium transition ${
+                  activeTab === "drift"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:bg-secondary"
+                }`}
+              >
+                Drift
+              </button>
+              <button
+                type="button"
                 onClick={() => setActiveTab("inspector")}
-                className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
+                className={`rounded-md px-2 py-1 text-xs font-medium transition ${
                   activeTab === "inspector"
                     ? "bg-primary text-primary-foreground"
                     : "text-muted-foreground hover:bg-secondary"
                 }`}
               >
-                Node Inspector
+                Inspector
               </button>
             </div>
 
@@ -420,12 +623,45 @@ export function ArchRadarWorkspace({
               <BlastRadiusPanel
                 analysis={activeAnalysis}
                 overlayActive={blastOverlayActive}
-                onToggleOverlay={() => setBlastOverlayActive((prev) => !prev)}
+                onToggleOverlay={() => {
+                  setBlastOverlayActive((prev) => {
+                    const next = !prev;
+                    if (next) setDriftOverlayActive(false);
+                    return next;
+                  });
+                }}
                 onClearAnalysis={() => {
                   setActiveAnalysis(null);
                   setBlastOverlayActive(false);
                 }}
                 onFocusPaths={handleFocusPaths}
+              />
+            ) : activeTab === "drift" ? (
+              <DriftTimelinePanel
+                snapshots={snapshots}
+                activeSnapshotId={selectedSnapshotId || graph.snapshot_id}
+                fromSnapshotId={fromSnapshotId}
+                toSnapshotId={toSnapshotId}
+                snapshotDiff={snapshotDiff}
+                driftOverlayActive={driftOverlayActive}
+                loading={driftLoading}
+                error={driftError}
+                isBillingDemoActive={activeRepo.url === DEMO_REPOSITORY.url}
+                onScrubSnapshot={(snapId) => void handleScrubSnapshot(snapId)}
+                onChangeRange={(fromId, toId) => void handleChangeDriftRange(fromId, toId)}
+                onToggleDriftOverlay={() => {
+                  setDriftOverlayActive((prev) => {
+                    const next = !prev;
+                    if (next) setBlastOverlayActive(false);
+                    return next;
+                  });
+                }}
+                onFocusPaths={handleFocusPaths}
+                onSwitchToBillingDemo={() => {
+                  const billingRepo =
+                    repos.find((r) => r.url === DEMO_REPOSITORY.url) ?? DEMO_REPOSITORY;
+                  void handleSelectRepo(billingRepo.id).then(() => void handleOpenDriftTab());
+                }}
               />
             ) : (
               <NodeInspectorDrawer
@@ -451,6 +687,7 @@ export function ArchRadarWorkspace({
         onAnalyzed={(analysis) => {
           setActiveAnalysis(analysis);
           setBlastOverlayActive(true);
+          setDriftOverlayActive(false);
           setActiveTab("blast");
           handleFocusPaths([
             ...analysis.blast_radius.direct,
@@ -463,6 +700,13 @@ export function ArchRadarWorkspace({
         open={indexOpen}
         onClose={() => setIndexOpen(false)}
         onIndexed={handleRepoIndexed}
+      />
+
+      <TelemetryModal
+        open={telemetryOpen}
+        isOfflineDemo={isOfflineDemo}
+        offlineAnalyses={DEMO_PR_SCENARIOS}
+        onClose={() => setTelemetryOpen(false)}
       />
     </div>
   );

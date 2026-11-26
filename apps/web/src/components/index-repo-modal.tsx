@@ -14,7 +14,7 @@ interface IndexRepoModalProps {
 
 const PROGRESS_STEPS = [
   "Fetching repository source tree (read-only)",
-  "Running Tree-sitter AST parser across TS/JS/Python",
+  "Running Tree-sitter AST parser across TS/JS/Python/Go",
   "Resolving imports, degrees & persisting snapshot",
 ] as const;
 

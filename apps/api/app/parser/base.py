@@ -72,6 +72,7 @@ class RawImport:
     edge_type: EdgeKind
     imported_symbols: list[str]
     level: int = 0
+    alias: str | None = None
 
 
 @dataclass(frozen=True)
@@ -85,14 +86,16 @@ class ParsedFile:
     exports: list[ExportedSymbol]
     imports: list[RawImport]
     has_syntax_errors: bool = False
+    package_name: str | None = None
 
 
 @dataclass(frozen=True)
 class AliasConfig:
-    """Path alias mappings loaded from tsconfig.json / jsconfig.json."""
+    """Path alias mappings loaded from tsconfig.json / jsconfig.json / go.mod."""
 
     base_url: str = ""
     paths: dict[str, list[str]] = field(default_factory=dict)
+    go_module_path: str = ""
 
 
 class LanguageAdapter(ABC):

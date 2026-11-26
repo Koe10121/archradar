@@ -5,7 +5,9 @@ from pathlib import Path
 import pytest
 
 from app.parser.base import AliasConfig, normalize_repo_path
+from app.parser.go import GoAdapter, load_go_module_path
 from app.parser.python import PythonAdapter
+from app.parser.registry import ParserRegistry
 from app.parser.typescript import TypeScriptAdapter, load_tsconfig_aliases
 
 
@@ -163,3 +165,108 @@ def test_typescript_nested_imports_inside_exported_functions() -> None:
     ]
     assert "src/dynamic/plugin.ts" in resolved
     assert "src/dynamic/legacy.js" in resolved
+
+
+def test_go_adapter_parses_imports_exports_and_gomod_resolution(tmp_path: Path) -> None:
+    """GoAdapter parses package, import aliases/blocks, exported symbols, and go.mod paths."""
+    (tmp_path / "go.mod").write_text(
+        "module github.com/acme/billing-go // primary module\n\ngo 1.22\n",
+        encoding="utf-8",
+    )
+    module_path = load_go_module_path(tmp_path)
+    assert module_path == "github.com/acme/billing-go"
+    alias_cfg = AliasConfig(go_module_path=module_path)
+
+    registry = ParserRegistry()
+    adapter = registry.get_adapter("internal/handlers/checkout.go")
+    assert isinstance(adapter, GoAdapter)
+    assert ".go" in registry.supported_extensions
+
+    known_files = {
+        "cmd/server/main.go",
+        "internal/auth/token.go",
+        "internal/auth/token_test.go",
+        "internal/billing/ledger.go",
+        "internal/handlers/checkout.go",
+        "pkg/metrics/counters.go",
+    }
+
+    source = """
+package handlers
+
+import "fmt"
+import (
+    "context"
+    authsvc "github.com/acme/billing-go/internal/auth"
+    . "github.com/acme/billing-go/internal/billing"
+    _ "github.com/acme/billing-go/pkg/metrics"
+    "github.com/stretchr/testify/assert"
+)
+
+type CheckoutHandler struct {
+    Service string
+}
+
+type (
+    PaymentGateway interface {
+        Charge(ctx context.Context) error
+    }
+    CurrencyCode = string
+    internalConfig struct {
+        debug bool
+    }
+)
+
+func NewCheckoutHandler() *CheckoutHandler {
+    return &CheckoutHandler{}
+}
+
+func helperLowercase() {}
+
+func (h *CheckoutHandler) ServeHTTP() {
+    fmt.Println(h.Service)
+}
+
+func (h *CheckoutHandler) parseBody() {}
+"""
+
+    parsed = adapter.parse("internal/handlers/checkout.go", source)
+    assert parsed.language == "go"
+    assert parsed.package_name == "handlers"
+    assert parsed.module_group == "internal"
+    assert not parsed.has_syntax_errors
+
+    export_kinds = {exp.name: exp.kind for exp in parsed.exports}
+    assert export_kinds == {
+        "CheckoutHandler": "struct",
+        "PaymentGateway": "interface",
+        "CurrencyCode": "type",
+        "NewCheckoutHandler": "function",
+        "ServeHTTP": "method",
+    }
+    assert "internalConfig" not in export_kinds
+    assert "helperLowercase" not in export_kinds
+    assert "parseBody" not in export_kinds
+
+    aliases_by_spec = {imp.specifier: imp.alias for imp in parsed.imports}
+    assert aliases_by_spec["fmt"] is None
+    assert aliases_by_spec["github.com/acme/billing-go/internal/auth"] == "authsvc"
+    assert aliases_by_spec["github.com/acme/billing-go/internal/billing"] == "."
+    assert aliases_by_spec["github.com/acme/billing-go/pkg/metrics"] == "_"
+
+    resolved = [
+        target
+        for imp in parsed.imports
+        for target in adapter.resolve_import(
+            "internal/handlers/checkout.go", imp, known_files, alias_cfg
+        )
+    ]
+    assert "internal/auth/token.go" in resolved
+    assert "internal/auth/token_test.go" not in resolved
+    assert "internal/billing/ledger.go" in resolved
+    assert "pkg/metrics/counters.go" in resolved
+    assert len(resolved) == 3
+
+    malformed = adapter.parse("internal/handlers/broken.go", "package handlers\nfunc Broken( {")
+    assert malformed.has_syntax_errors is True
+    assert malformed.package_name == "handlers"

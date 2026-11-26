@@ -5,11 +5,22 @@ import {
 import {
   GraphResponseSchema,
   RepositorySummarySchema,
+  SnapshotDiffResponseSchema,
+  SnapshotSummarySchema,
+  type CentralityDelta,
   type GraphResponse,
   type RepositorySummary,
+  type SnapshotDiffEdge,
+  type SnapshotDiffResponse,
+  type SnapshotSummary,
 } from "@/lib/schemas/repo";
+import {
+  TelemetrySummaryResponseSchema,
+  type TelemetrySummaryResponse,
+} from "@/lib/schemas/telemetry";
 
 export const DEMO_BILLING_REPO_ID = "00000000-0000-0000-0000-000000000042";
+export const DEMO_BILLING_V1_SNAPSHOT_ID = "00000000-0000-0000-0000-000000000100";
 export const DEMO_BILLING_SNAPSHOT_ID = "00000000-0000-0000-0000-000000000101";
 export const DEMO_FULFILLMENT_REPO_ID = "00000000-0000-0000-0000-000000000051";
 export const DEMO_FULFILLMENT_SNAPSHOT_ID = "00000000-0000-0000-0000-000000000201";
@@ -524,10 +535,355 @@ export const DEMO_FULFILLMENT_GRAPH: GraphResponse = GraphResponseSchema.parse({
 
 export const DEMO_GRAPH: GraphResponse = DEMO_BILLING_GRAPH;
 
+const billingV1Nodes = [
+  {
+    id: "v1-token",
+    path: "src/lib/token.ts",
+    language: "typescript",
+    module_group: "src/lib",
+    loc: 84,
+    exports: [
+      {
+        name: "verifyToken",
+        kind: "function",
+        signature: "export function verifyToken(token: string): SessionClaims",
+      },
+      {
+        name: "signSessionToken",
+        kind: "function",
+        signature: "export function signSessionToken(userId: string): string",
+      },
+    ],
+    in_degree: 2,
+    out_degree: 0,
+  },
+  {
+    id: "v1-formatters",
+    path: "src/lib/formatters.ts",
+    language: "typescript",
+    module_group: "src/lib",
+    loc: 36,
+    exports: [
+      {
+        name: "formatUsdCents",
+        kind: "function",
+        signature: "export function formatUsdCents(cents: number): string",
+      },
+    ],
+    in_degree: 1,
+    out_degree: 0,
+  },
+  {
+    id: "v1-legacy-billing",
+    path: "src/lib/legacyBillingClient.ts",
+    language: "typescript",
+    module_group: "src/lib",
+    loc: 52,
+    exports: [
+      {
+        name: "postLegacyCharge",
+        kind: "function",
+        signature: "export async function postLegacyCharge(amount: number): Promise<void>",
+      },
+    ],
+    in_degree: 1,
+    out_degree: 0,
+  },
+  {
+    id: "v1-auth-mw",
+    path: "src/middleware/auth.ts",
+    language: "typescript",
+    module_group: "src/middleware",
+    loc: 72,
+    exports: [
+      {
+        name: "requireAuth",
+        kind: "function",
+        signature: "export async function requireAuth(req: Request): Promise<AuthContext>",
+      },
+    ],
+    in_degree: 3,
+    out_degree: 1,
+  },
+  {
+    id: "v1-session-svc",
+    path: "src/services/session.ts",
+    language: "typescript",
+    module_group: "src/services",
+    loc: 74,
+    exports: [
+      {
+        name: "refreshSession",
+        kind: "function",
+        signature: "export async function refreshSession(token: string): Promise<SessionResult>",
+      },
+    ],
+    in_degree: 0,
+    out_degree: 1,
+  },
+  {
+    id: "v1-billing-svc",
+    path: "src/services/billing.ts",
+    language: "typescript",
+    module_group: "src/services",
+    loc: 124,
+    exports: [
+      {
+        name: "chargeSubscription",
+        kind: "function",
+        signature: "export async function chargeSubscription(ctx: AuthContext, planId: string): Promise<Invoice>",
+      },
+      {
+        name: "syncSubscriptionState",
+        kind: "function",
+        signature: "export async function syncSubscriptionState(customerId: string): Promise<void>",
+      },
+    ],
+    in_degree: 2,
+    out_degree: 2,
+  },
+  {
+    id: "v1-checkout-route",
+    path: "src/api/routes/checkout.ts",
+    language: "typescript",
+    module_group: "src/api",
+    loc: 92,
+    exports: [
+      {
+        name: "postCheckout",
+        kind: "function",
+        signature: "export async function postCheckout(req: Request): Promise<Response>",
+      },
+    ],
+    in_degree: 0,
+    out_degree: 2,
+  },
+  {
+    id: "v1-stripe-webhook",
+    path: "src/api/webhooks/stripe.ts",
+    language: "typescript",
+    module_group: "src/api",
+    loc: 86,
+    exports: [
+      {
+        name: "handleStripeWebhook",
+        kind: "function",
+        signature: "export async function handleStripeWebhook(req: Request): Promise<Response>",
+      },
+    ],
+    in_degree: 0,
+    out_degree: 1,
+  },
+  {
+    id: "v1-billing-ui",
+    path: "src/ui/BillingSummary.tsx",
+    language: "typescript",
+    module_group: "src/ui",
+    loc: 84,
+    exports: [
+      {
+        name: "BillingSummary",
+        kind: "function",
+        signature: "export function BillingSummary({ cents }: BillingSummaryProps): JSX.Element",
+      },
+    ],
+    in_degree: 0,
+    out_degree: 2,
+  },
+];
+
+const billingV1EdgePairs: Array<[string, string, string, string, string[]]> = [
+  ["v1-e1", "src/middleware/auth.ts", "src/lib/token.ts", "import", ["verifyToken"]],
+  ["v1-e2", "src/services/session.ts", "src/lib/token.ts", "import", ["verifyToken", "signSessionToken"]],
+  ["v1-e3", "src/services/billing.ts", "src/middleware/auth.ts", "import", ["requireAuth"]],
+  ["v1-e4", "src/services/billing.ts", "src/lib/legacyBillingClient.ts", "import", ["postLegacyCharge"]],
+  ["v1-e5", "src/api/routes/checkout.ts", "src/middleware/auth.ts", "import", ["requireAuth"]],
+  ["v1-e6", "src/api/routes/checkout.ts", "src/services/billing.ts", "import", ["chargeSubscription"]],
+  ["v1-e7", "src/api/webhooks/stripe.ts", "src/services/billing.ts", "import", ["syncSubscriptionState"]],
+  ["v1-e8", "src/ui/BillingSummary.tsx", "src/lib/formatters.ts", "import", ["formatUsdCents"]],
+  ["v1-e9", "src/ui/BillingSummary.tsx", "src/middleware/auth.ts", "import", ["requireAuth"]],
+];
+
+const billingV1NodeIdByPath = Object.fromEntries(billingV1Nodes.map((n) => [n.path, n.id]));
+
+export const DEMO_BILLING_V1_GRAPH: GraphResponse = GraphResponseSchema.parse({
+  repository_id: DEMO_BILLING_REPO_ID,
+  snapshot_id: DEMO_BILLING_V1_SNAPSHOT_ID,
+  commit_sha: "4c82d10",
+  file_count: billingV1Nodes.length,
+  edge_count: billingV1EdgePairs.length,
+  nodes: billingV1Nodes,
+  edges: billingV1EdgePairs.map(([id, sourcePath, targetPath, edgeType, importedSymbols]) => ({
+    id,
+    source_node_id: billingV1NodeIdByPath[sourcePath] ?? sourcePath,
+    target_node_id: billingV1NodeIdByPath[targetPath] ?? targetPath,
+    source_path: sourcePath,
+    target_path: targetPath,
+    edge_type: edgeType,
+    imported_symbols: importedSymbols,
+  })),
+});
+
 export const DEMO_GRAPHS_BY_REPO_ID: Record<string, GraphResponse> = {
   [DEMO_BILLING_REPO_ID]: DEMO_BILLING_GRAPH,
   [DEMO_FULFILLMENT_REPO_ID]: DEMO_FULFILLMENT_GRAPH,
 };
+
+export const DEMO_GRAPHS_BY_SNAPSHOT_ID: Record<string, GraphResponse> = {
+  [DEMO_BILLING_V1_SNAPSHOT_ID]: DEMO_BILLING_V1_GRAPH,
+  [DEMO_BILLING_SNAPSHOT_ID]: DEMO_BILLING_GRAPH,
+  [DEMO_FULFILLMENT_SNAPSHOT_ID]: DEMO_FULFILLMENT_GRAPH,
+};
+
+export const DEMO_SNAPSHOTS_BY_REPO_ID: Record<string, SnapshotSummary[]> = {
+  [DEMO_BILLING_REPO_ID]: [
+    SnapshotSummarySchema.parse({
+      id: DEMO_BILLING_V1_SNAPSHOT_ID,
+      repository_id: DEMO_BILLING_REPO_ID,
+      commit_sha: "4c82d10",
+      file_count: billingV1Nodes.length,
+      edge_count: billingV1EdgePairs.length,
+      status: "ready",
+      created_at: "2026-11-12T08:30:00Z",
+    }),
+    SnapshotSummarySchema.parse({
+      id: DEMO_BILLING_SNAPSHOT_ID,
+      repository_id: DEMO_BILLING_REPO_ID,
+      commit_sha: "a91f4c2",
+      file_count: billingNodes.length,
+      edge_count: billingEdgePairs.length,
+      status: "ready",
+      created_at: "2026-11-26T06:30:00Z",
+    }),
+  ],
+  [DEMO_FULFILLMENT_REPO_ID]: [
+    SnapshotSummarySchema.parse({
+      id: DEMO_FULFILLMENT_SNAPSHOT_ID,
+      repository_id: DEMO_FULFILLMENT_REPO_ID,
+      commit_sha: "d47e81b",
+      file_count: fulfillmentNodes.length,
+      edge_count: fulfillmentEdgePairs.length,
+      status: "ready",
+      created_at: "2026-11-26T07:30:00Z",
+    }),
+  ],
+};
+
+export function computeDemoSnapshotDiff(
+  fromSnapshot: SnapshotSummary,
+  toSnapshot: SnapshotSummary,
+  fromGraph: GraphResponse,
+  toGraph: GraphResponse
+): SnapshotDiffResponse {
+  const fromByPath = new Map(fromGraph.nodes.map((n) => [n.path, n]));
+  const toByPath = new Map(toGraph.nodes.map((n) => [n.path, n]));
+
+  const addedFiles = [...toByPath.keys()].filter((p) => !fromByPath.has(p)).sort();
+  const removedFiles = [...fromByPath.keys()].filter((p) => !toByPath.has(p)).sort();
+
+  const edgeKey = (source: string, target: string, type: string) => `${source}=>${target}::${type}`;
+  const fromEdgeMap = new Map(
+    fromGraph.edges.map((e) => [edgeKey(e.source_path, e.target_path, e.edge_type), e])
+  );
+  const toEdgeMap = new Map(
+    toGraph.edges.map((e) => [edgeKey(e.source_path, e.target_path, e.edge_type), e])
+  );
+
+  const addedEdges: SnapshotDiffEdge[] = [...toEdgeMap.entries()]
+    .filter(([key]) => !fromEdgeMap.has(key))
+    .map(([, e]) => ({
+      source_path: e.source_path,
+      target_path: e.target_path,
+      edge_type: e.edge_type,
+      imported_symbols: e.imported_symbols,
+    }))
+    .sort((a, b) => `${a.source_path}->${a.target_path}`.localeCompare(`${b.source_path}->${b.target_path}`));
+
+  const removedEdges: SnapshotDiffEdge[] = [...fromEdgeMap.entries()]
+    .filter(([key]) => !toEdgeMap.has(key))
+    .map(([, e]) => ({
+      source_path: e.source_path,
+      target_path: e.target_path,
+      edge_type: e.edge_type,
+      imported_symbols: e.imported_symbols,
+    }))
+    .sort((a, b) => `${a.source_path}->${a.target_path}`.localeCompare(`${b.source_path}->${b.target_path}`));
+
+  const allPaths = new Set([...fromByPath.keys(), ...toByPath.keys()]);
+  const centralityDeltas: CentralityDelta[] = [];
+
+  for (const path of [...allPaths].sort()) {
+    const prevNode = fromByPath.get(path);
+    const nextNode = toByPath.get(path);
+    const fromIn = prevNode?.in_degree ?? 0;
+    const toIn = nextNode?.in_degree ?? 0;
+    const fromOut = prevNode?.out_degree ?? 0;
+    const toOut = nextNode?.out_degree ?? 0;
+    const inDelta = toIn - fromIn;
+    const outDelta = toOut - fromOut;
+
+    if (!prevNode && nextNode) {
+      centralityDeltas.push({
+        path,
+        module_group: nextNode.module_group,
+        language: nextNode.language,
+        from_in_degree: 0,
+        to_in_degree: toIn,
+        in_degree_delta: inDelta,
+        from_out_degree: 0,
+        to_out_degree: toOut,
+        out_degree_delta: outDelta,
+        status: "added",
+      });
+    } else if (prevNode && !nextNode) {
+      centralityDeltas.push({
+        path,
+        module_group: prevNode.module_group,
+        language: prevNode.language,
+        from_in_degree: fromIn,
+        to_in_degree: 0,
+        in_degree_delta: inDelta,
+        from_out_degree: fromOut,
+        to_out_degree: 0,
+        out_degree_delta: outDelta,
+        status: "removed",
+      });
+    } else if (nextNode && (inDelta !== 0 || outDelta !== 0)) {
+      centralityDeltas.push({
+        path,
+        module_group: nextNode.module_group,
+        language: nextNode.language,
+        from_in_degree: fromIn,
+        to_in_degree: toIn,
+        in_degree_delta: inDelta,
+        from_out_degree: fromOut,
+        to_out_degree: toOut,
+        out_degree_delta: outDelta,
+        status: "changed",
+      });
+    }
+  }
+
+  centralityDeltas.sort(
+    (a, b) =>
+      Math.abs(b.in_degree_delta) - Math.abs(a.in_degree_delta) ||
+      Math.abs(b.out_degree_delta) - Math.abs(a.out_degree_delta) ||
+      a.path.localeCompare(b.path)
+  );
+
+  return SnapshotDiffResponseSchema.parse({
+    repository_id: toSnapshot.repository_id,
+    from_snapshot: fromSnapshot,
+    to_snapshot: toSnapshot,
+    added_files: addedFiles,
+    removed_files: removedFiles,
+    added_edges: addedEdges,
+    removed_edges: removedEdges,
+    centrality_deltas: centralityDeltas,
+    file_count_delta: toSnapshot.file_count - fromSnapshot.file_count,
+    edge_count_delta: toSnapshot.edge_count - fromSnapshot.edge_count,
+  });
+}
 
 export const DEMO_PR_SCENARIOS: PRAnalysisResponse[] = [
   PRAnalysisResponseSchema.parse({
@@ -884,3 +1240,111 @@ export const SAMPLE_DIFFS_BY_REPO_ID: Record<string, string> = {
   [DEMO_BILLING_REPO_ID]: SAMPLE_UNIFIED_DIFF,
   [DEMO_FULFILLMENT_REPO_ID]: SAMPLE_FULFILLMENT_DIFF,
 };
+
+export function computeDemoTelemetrySummary(
+  analyses: PRAnalysisResponse[] = DEMO_PR_SCENARIOS
+): TelemetrySummaryResponse {
+  const total = analyses.length;
+  if (total === 0) {
+    return TelemetrySummaryResponseSchema.parse({
+      total_analyses: 0,
+      ai_enabled_analyses: 0,
+      deterministic_only_analyses: 0,
+      risk_counts: { low: 0, medium: 0, high: 0, critical: 0 },
+      median_latency_ms: 0,
+      p95_latency_ms: 0,
+      avg_prompt_tokens: 0,
+      avg_completion_tokens: 0,
+      total_prompt_tokens: 0,
+      total_completion_tokens: 0,
+      total_cost_usd: 0,
+      avg_cost_per_pr_usd: 0,
+      projected_cost_per_1000_prs_usd: 0,
+      total_cited_paths: 0,
+      valid_cited_paths: 0,
+      citation_gate_intercepts: 0,
+      models: [],
+    });
+  }
+
+  const riskCounts = { low: 0, medium: 0, high: 0, critical: 0 };
+  const latencies: number[] = [];
+  let aiEnabled = 0;
+  let totalPrompt = 0;
+  let totalCompletion = 0;
+  let totalCost = 0;
+  let totalCited = 0;
+  let validCited = 0;
+  let intercepts = 0;
+  const byModel = new Map<string, PRAnalysisResponse[]>();
+
+  for (const item of analyses) {
+    const risk = item.ai_report?.overall_risk ?? item.blast_radius.deterministic_risk;
+    riskCounts[risk] += 1;
+    latencies.push(item.latency_ms);
+    if (item.ai_report) aiEnabled += 1;
+    totalPrompt += item.prompt_tokens;
+    totalCompletion += item.completion_tokens;
+    totalCost += item.estimated_cost_usd;
+    totalCited += item.citation_telemetry?.total_cited_paths ?? 0;
+    validCited += item.citation_telemetry?.valid_cited_paths ?? 0;
+    intercepts += item.citation_telemetry?.hallucination_caught ?? 0;
+
+    const modelKey = item.model_used ?? "deterministic-only";
+    const group = byModel.get(modelKey) ?? [];
+    group.push(item);
+    byModel.set(modelKey, group);
+  }
+
+  const orderedLatencies = [...latencies].sort((a, b) => a - b);
+  const mid = Math.floor(orderedLatencies.length / 2);
+  const medianLatency =
+    orderedLatencies.length % 2 === 1
+      ? (orderedLatencies[mid] ?? 0)
+      : ((orderedLatencies[mid - 1] ?? 0) + (orderedLatencies[mid] ?? 0)) / 2;
+  const p95Idx = Math.min(
+    orderedLatencies.length - 1,
+    Math.max(0, Math.ceil(0.95 * orderedLatencies.length) - 1)
+  );
+  const p95Latency = orderedLatencies[p95Idx] ?? 0;
+  const avgCost = totalCost / total;
+
+  const models = [...byModel.entries()]
+    .map(([model, group]) => ({
+      model,
+      analyses_count: group.length,
+      avg_prompt_tokens: Number(
+        (group.reduce((acc, r) => acc + r.prompt_tokens, 0) / group.length).toFixed(1)
+      ),
+      avg_completion_tokens: Number(
+        (group.reduce((acc, r) => acc + r.completion_tokens, 0) / group.length).toFixed(1)
+      ),
+      total_cost_usd: Number(
+        group.reduce((acc, r) => acc + r.estimated_cost_usd, 0).toFixed(6)
+      ),
+      avg_latency_ms: Number(
+        (group.reduce((acc, r) => acc + r.latency_ms, 0) / group.length).toFixed(1)
+      ),
+    }))
+    .sort((a, b) => b.analyses_count - a.analyses_count || a.model.localeCompare(b.model));
+
+  return TelemetrySummaryResponseSchema.parse({
+    total_analyses: total,
+    ai_enabled_analyses: aiEnabled,
+    deterministic_only_analyses: total - aiEnabled,
+    risk_counts: riskCounts,
+    median_latency_ms: Number(medianLatency.toFixed(2)),
+    p95_latency_ms: Number(p95Latency.toFixed(2)),
+    avg_prompt_tokens: Number((totalPrompt / total).toFixed(1)),
+    avg_completion_tokens: Number((totalCompletion / total).toFixed(1)),
+    total_prompt_tokens: totalPrompt,
+    total_completion_tokens: totalCompletion,
+    total_cost_usd: Number(totalCost.toFixed(6)),
+    avg_cost_per_pr_usd: Number(avgCost.toFixed(6)),
+    projected_cost_per_1000_prs_usd: Number((avgCost * 1000).toFixed(4)),
+    total_cited_paths: totalCited,
+    valid_cited_paths: validCited,
+    citation_gate_intercepts: intercepts,
+    models,
+  });
+}

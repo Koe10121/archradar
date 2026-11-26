@@ -125,8 +125,9 @@ async def analyze_pull_request(
                     detail=f"Failed to fetch GitHub PR diff: {exc}",
                 ) from exc
 
+        in_degree_by_file = {n.path: n.in_degree for n in node_snapshots}
         try:
-            parsed_diff = parse_unified_diff(raw_diff)
+            parsed_diff = parse_unified_diff(raw_diff, in_degree_by_file=in_degree_by_file)
         except Exception as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -174,6 +175,7 @@ async def analyze_pull_request(
                     nodes=node_snapshots,
                     blast_radius=blast_radius,
                     doc_context=payload.doc_context or None,
+                    raw_diff=raw_diff,
                 )
             except ValueError as exc:
                 raise HTTPException(
@@ -197,6 +199,9 @@ async def analyze_pull_request(
             changed_files=parsed_diff.changed_files,
             blast_radius_json=blast_radius.model_dump(),
             ai_report_json=ai_report.model_dump() if ai_report is not None else None,
+            citation_telemetry_json=(
+                citation_telemetry.model_dump() if citation_telemetry is not None else None
+            ),
             model_used=model_used,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
@@ -271,11 +276,14 @@ async def list_repository_analyses(
             else None
         )
         valid_paths = paths_by_snapshot.get(record.snapshot_id, set())
-        telemetry = (
-            validate_report_citations(ai_report, valid_paths)[1]
-            if ai_report is not None
-            else None
-        )
+        if record.citation_telemetry_json is not None:
+            telemetry: CitationValidationTelemetry | None = (
+                CitationValidationTelemetry.model_validate(record.citation_telemetry_json)
+            )
+        elif ai_report is not None:
+            telemetry = validate_report_citations(ai_report, valid_paths)[1]
+        else:
+            telemetry = None
         responses.append(
             PRAnalysisResponse(
                 id=record.id,
@@ -324,11 +332,14 @@ async def get_analysis(analysis_id: UUID, request: Request) -> PRAnalysisRespons
         if record.ai_report_json is not None
         else None
     )
-    telemetry = (
-        validate_report_citations(ai_report, valid_paths)[1]
-        if ai_report is not None
-        else None
-    )
+    if record.citation_telemetry_json is not None:
+        telemetry: CitationValidationTelemetry | None = (
+            CitationValidationTelemetry.model_validate(record.citation_telemetry_json)
+        )
+    elif ai_report is not None:
+        telemetry = validate_report_citations(ai_report, valid_paths)[1]
+    else:
+        telemetry = None
 
     return PRAnalysisResponse(
         id=record.id,

@@ -13,13 +13,19 @@ from app.core.config import Settings
 from app.main import create_app
 from app.schemas.analysis import (
     BlastRadiusReport,
+    BlastRadiusResult,
     ImpactedFlow,
     PRAnalysisResponse,
 )
 from app.schemas.repo import RepoIndexResponse
-from app.services.ai_analyzer import LLMGenerationResult
+from app.services.ai_analyzer import AIAnalyzer, LLMGenerationResult
+from app.services.blast_radius import NodeSnapshot
 from app.services.citation_validator import validate_report_citations
-from app.services.github import parse_unified_diff, verify_github_webhook_signature
+from app.services.github import (
+    parse_unified_diff,
+    prioritize_and_truncate_diff,
+    verify_github_webhook_signature,
+)
 
 
 class MockLLMProvider:
@@ -28,6 +34,7 @@ class MockLLMProvider:
     def __init__(self, responses: list[str]) -> None:
         self._responses = list(responses)
         self.calls = 0
+        self.last_user_prompt = ""
 
     async def generate_structured(
         self,
@@ -35,7 +42,8 @@ class MockLLMProvider:
         user_prompt: str,
         response_schema: type[BlastRadiusReport],
     ) -> LLMGenerationResult:
-        del system_prompt, user_prompt, response_schema
+        del system_prompt, response_schema
+        self.last_user_prompt = user_prompt
         text = self._responses[min(self.calls, len(self._responses) - 1)]
         self.calls += 1
         return LLMGenerationResult(
@@ -237,3 +245,145 @@ async def test_github_webhook_hmac_verification(sqlite_engine: AsyncEngine) -> N
         )
         assert ok_resp.status_code == 202
         assert ok_resp.json()["pr_number"] == 42
+
+
+def test_prioritize_diff_preserves_buried_breaking_hunk() -> None:
+    """Smart priority truncation promotes buried breaking hunks ahead of noisy comments."""
+    noisy_lines = "\n".join(
+        f"+// noisy generated comment line {idx:03d}: padding-scale=16px" for idx in range(230)
+    )
+    large_diff = (
+        "diff --git a/src/styles/theme.ts b/src/styles/theme.ts\n"
+        "--- a/src/styles/theme.ts\n"
+        "+++ b/src/styles/theme.ts\n"
+        "@@ -1,2 +1,232 @@\n"
+        " export const THEME = {\n"
+        f"{noisy_lines}\n"
+        " };\n"
+        "diff --git a/src/lib/crypto.ts b/src/lib/crypto.ts\n"
+        "--- a/src/lib/crypto.ts\n"
+        "+++ b/src/lib/crypto.ts\n"
+        "@@ -1,3 +1,3 @@\n"
+        "-export function verifyHmacSignature(payload: string, sig: string): boolean {\n"
+        "+export function verifyWebhookSignature(payload: string, sig: string): boolean {\n"
+        "   return Boolean(payload && sig);\n"
+        " }\n"
+    )
+    assert len(large_diff) > 12_000
+
+    parsed = parse_unified_diff(
+        large_diff,
+        max_chars=12_000,
+        in_degree_by_file={"src/styles/theme.ts": 0, "src/lib/crypto.ts": 2},
+    )
+    assert len(parsed.truncated_diff) <= 12_000
+    assert "src/lib/crypto.ts" in parsed.truncated_diff
+    assert "verifyWebhookSignature" in parsed.truncated_diff
+    assert parsed.truncated_diff.index("src/lib/crypto.ts") < parsed.truncated_diff.index(
+        "src/styles/theme.ts"
+    )
+
+
+def test_prioritize_diff_prefers_high_in_degree_and_sensitive_boundaries() -> None:
+    """Priority truncation ranks high in_degree hubs and sensitive boundaries before leaf files."""
+    short_diff = (
+        "diff --git a/src/leaf.ts b/src/leaf.ts\n--- a/src/leaf.ts\n+++ b/src/leaf.ts\n"
+        "@@ -1 +1 @@\n-const x = 1;\n+const x = 2;\n"
+    )
+    assert prioritize_and_truncate_diff(short_diff, max_chars=12_000) == short_diff
+
+    leaf_padding = "\n".join(f"+const item{i} = {i};" for i in range(40))
+    multi_diff = (
+        "diff --git a/src/ui/widget.ts b/src/ui/widget.ts\n"
+        "--- a/src/ui/widget.ts\n"
+        "+++ b/src/ui/widget.ts\n"
+        "@@ -1,1 +1,41 @@\n"
+        " const base = 0;\n"
+        f"{leaf_padding}\n"
+        "diff --git a/src/middleware/auth.ts b/src/middleware/auth.ts\n"
+        "--- a/src/middleware/auth.ts\n"
+        "+++ b/src/middleware/auth.ts\n"
+        "@@ -1,1 +1,1 @@\n"
+        "-export function requireAuth(req: Request): boolean { return true; }\n"
+        "+export function requireAuth(req: Request, role: string): boolean {\n"
+        "+  return Boolean(role);\n"
+        "+}\n"
+    )
+    bounded = prioritize_and_truncate_diff(
+        multi_diff,
+        max_chars=450,
+        in_degree_by_file={"src/ui/widget.ts": 0, "src/middleware/auth.ts": 4},
+    )
+    assert len(bounded) <= 450
+    assert "src/middleware/auth.ts" in bounded
+    assert "requireAuth(req: Request, role: string)" in bounded
+
+
+async def test_ai_analyzer_uses_priority_diff_with_raw_diff() -> None:
+    """AIAnalyzer.analyze prioritizes raw_diff hunks using graph centrality before prompting."""
+    valid_report_json = json.dumps(
+        {
+            "overall_risk": "high",
+            "confidence": 0.92,
+            "executive_summary": "verifyWebhookSignature rename breaks stripe webhook.",
+            "breaking_change_detected": True,
+            "impacted_flows": [
+                {
+                    "title": "Webhook Verification",
+                    "severity": "high",
+                    "entry_file": "src/api/webhooks/stripe.ts",
+                    "affected_files": ["src/lib/crypto.ts"],
+                    "explanation": "Renamed verifyHmacSignature.",
+                    "suggested_test": "Test webhook verification.",
+                }
+            ],
+            "doc_drift_alerts": [],
+            "reviewer_checklist": ["Update stripe webhook import"],
+        }
+    )
+    mock_llm = MockLLMProvider(responses=[valid_report_json])
+    analyzer = AIAnalyzer(provider=mock_llm)
+
+    noise = "\n".join(f"+// noise {i:03d}: padding token" for i in range(40))
+    raw_diff = (
+        "diff --git a/src/styles/theme.ts b/src/styles/theme.ts\n"
+        "--- a/src/styles/theme.ts\n"
+        "+++ b/src/styles/theme.ts\n"
+        "@@ -1,1 +1,41 @@\n"
+        " export const THEME = {};\n"
+        f"{noise}\n"
+        "diff --git a/src/lib/crypto.ts b/src/lib/crypto.ts\n"
+        "--- a/src/lib/crypto.ts\n"
+        "+++ b/src/lib/crypto.ts\n"
+        "@@ -1,1 +1,1 @@\n"
+        "-export function verifyHmacSignature(): boolean { return true; }\n"
+        "+export function verifyWebhookSignature(): boolean { return true; }\n"
+    )
+    nodes = [
+        NodeSnapshot("src/styles/theme.ts", "typescript", "src/styles", 50, 0, 0, []),
+        NodeSnapshot("src/lib/crypto.ts", "typescript", "src/lib", 20, 3, 0, []),
+        NodeSnapshot("src/api/webhooks/stripe.ts", "typescript", "src/api", 40, 0, 1, []),
+    ]
+    blast = BlastRadiusResult(
+        direct=["src/styles/theme.ts", "src/lib/crypto.ts"],
+        hop_1=["src/api/webhooks/stripe.ts"],
+        hop_2=[],
+        hop_3=[],
+        score=70,
+        deterministic_risk="high",
+        max_in_degree=3,
+        sensitive_boundaries_touched=["webhooks"],
+        symbol_matched_files=["src/api/webhooks/stripe.ts"],
+        impacted_edges=[],
+    )
+
+    await analyzer.analyze(
+        pr_title="Massive theme update + crypto rename",
+        pr_description="",
+        truncated_diff="ignored prefix",
+        nodes=nodes,
+        blast_radius=blast,
+        raw_diff=raw_diff,
+        max_diff_chars=500,
+    )
+    assert "verifyWebhookSignature" in mock_llm.last_user_prompt

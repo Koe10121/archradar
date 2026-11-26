@@ -1,12 +1,12 @@
 """Repository indexing and graph retrieval API endpoints."""
 
 from pathlib import Path
-from typing import cast
+from typing import Annotated, cast
 from uuid import UUID
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request, status
-from sqlalchemy import desc, select
+from fastapi import APIRouter, HTTPException, Query, Request, status
+from sqlalchemy import asc, desc, select
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.core.config import Settings
@@ -20,8 +20,11 @@ from app.schemas.repo import (
     RepoIndexRequest,
     RepoIndexResponse,
     RepositorySummary,
+    SnapshotDiffResponse,
+    SnapshotSummary,
 )
 from app.services.indexer import RepoIndexer, parse_github_repo_url
+from app.services.snapshot_diff import compute_snapshot_diff
 
 router = APIRouter(prefix="/api/repos", tags=["repositories"])
 
@@ -124,8 +127,12 @@ async def list_repositories(request: Request) -> list[RepositorySummary]:
 
 
 @router.get("/{repo_id}/graph", response_model=GraphResponse)
-async def get_repository_graph(repo_id: UUID, request: Request) -> GraphResponse:
-    """Return file nodes and dependency edges for the repository's latest ready snapshot."""
+async def get_repository_graph(
+    repo_id: UUID,
+    request: Request,
+    snapshot_id: Annotated[UUID | None, Query()] = None,
+) -> GraphResponse:
+    """Return file nodes and dependency edges for a specific or latest ready snapshot."""
     engine = cast(AsyncEngine, request.app.state.db_engine)
     session_factory = create_session_factory(engine)
 
@@ -138,15 +145,24 @@ async def get_repository_graph(repo_id: UUID, request: Request) -> GraphResponse
                 detail="Repository not found",
             )
 
-        snap_result = await session.execute(
-            select(GraphSnapshot)
-            .where(
-                GraphSnapshot.repository_id == repo.id,
-                GraphSnapshot.status == "ready",
+        if snapshot_id is not None:
+            snap_result = await session.execute(
+                select(GraphSnapshot).where(
+                    GraphSnapshot.id == snapshot_id,
+                    GraphSnapshot.repository_id == repo.id,
+                    GraphSnapshot.status == "ready",
+                )
             )
-            .order_by(desc(GraphSnapshot.created_at))
-            .limit(1)
-        )
+        else:
+            snap_result = await session.execute(
+                select(GraphSnapshot)
+                .where(
+                    GraphSnapshot.repository_id == repo.id,
+                    GraphSnapshot.status == "ready",
+                )
+                .order_by(desc(GraphSnapshot.created_at))
+                .limit(1)
+            )
         snapshot = snap_result.scalar_one_or_none()
         if snapshot is None:
             raise HTTPException(
@@ -199,4 +215,137 @@ async def get_repository_graph(repo_id: UUID, request: Request) -> GraphResponse
         edge_count=snapshot.edge_count,
         nodes=node_dtos,
         edges=edge_dtos,
+    )
+
+
+@router.get("/{repo_id}/snapshots", response_model=list[SnapshotSummary])
+async def list_repository_snapshots(repo_id: UUID, request: Request) -> list[SnapshotSummary]:
+    """List ready graph snapshots for a repository in chronological order."""
+    engine = cast(AsyncEngine, request.app.state.db_engine)
+    session_factory = create_session_factory(engine)
+
+    async with session_factory() as session:
+        repo_result = await session.execute(select(Repository).where(Repository.id == repo_id))
+        if repo_result.scalar_one_or_none() is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Repository not found",
+            )
+
+        snaps_result = await session.execute(
+            select(GraphSnapshot)
+            .where(
+                GraphSnapshot.repository_id == repo_id,
+                GraphSnapshot.status == "ready",
+            )
+            .order_by(asc(GraphSnapshot.created_at), asc(GraphSnapshot.id))
+        )
+        snapshots = list(snaps_result.scalars().all())
+
+    return [
+        SnapshotSummary(
+            id=snap.id,
+            repository_id=snap.repository_id,
+            commit_sha=snap.commit_sha,
+            file_count=snap.file_count,
+            edge_count=snap.edge_count,
+            status=snap.status,
+            created_at=snap.created_at,
+        )
+        for snap in snapshots
+    ]
+
+
+@router.get("/{repo_id}/snapshots/diff", response_model=SnapshotDiffResponse)
+async def diff_repository_snapshots(
+    repo_id: UUID,
+    request: Request,
+    from_snapshot_id: Annotated[UUID, Query()],
+    to_snapshot_id: Annotated[UUID, Query()],
+) -> SnapshotDiffResponse:
+    """Compute added/removed files, edges, and centrality deltas between two snapshots."""
+    engine = cast(AsyncEngine, request.app.state.db_engine)
+    session_factory = create_session_factory(engine)
+
+    async with session_factory() as session:
+        repo_result = await session.execute(select(Repository).where(Repository.id == repo_id))
+        if repo_result.scalar_one_or_none() is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Repository not found",
+            )
+
+        from_res = await session.execute(
+            select(GraphSnapshot).where(
+                GraphSnapshot.id == from_snapshot_id,
+                GraphSnapshot.repository_id == repo_id,
+                GraphSnapshot.status == "ready",
+            )
+        )
+        from_snap = from_res.scalar_one_or_none()
+        if from_snap is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Source snapshot not found for repository",
+            )
+
+        to_res = await session.execute(
+            select(GraphSnapshot).where(
+                GraphSnapshot.id == to_snapshot_id,
+                GraphSnapshot.repository_id == repo_id,
+                GraphSnapshot.status == "ready",
+            )
+        )
+        to_snap = to_res.scalar_one_or_none()
+        if to_snap is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Target snapshot not found for repository",
+            )
+
+        from_nodes = list(
+            (
+                await session.execute(
+                    select(FileNode).where(FileNode.snapshot_id == from_snap.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        from_edges = list(
+            (
+                await session.execute(
+                    select(DependencyEdge).where(DependencyEdge.snapshot_id == from_snap.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        to_nodes = list(
+            (
+                await session.execute(
+                    select(FileNode).where(FileNode.snapshot_id == to_snap.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        to_edges = list(
+            (
+                await session.execute(
+                    select(DependencyEdge).where(DependencyEdge.snapshot_id == to_snap.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    return compute_snapshot_diff(
+        repository_id=repo_id,
+        from_snapshot=from_snap,
+        to_snapshot=to_snap,
+        from_nodes=from_nodes,
+        from_edges=from_edges,
+        to_nodes=to_nodes,
+        to_edges=to_edges,
     )

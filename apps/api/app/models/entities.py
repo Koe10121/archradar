@@ -150,6 +150,9 @@ class PRAnalysis(Base):
         JSONVariant, nullable=False, default=dict
     )
     ai_report_json: Mapped[dict[str, object] | None] = mapped_column(JSONVariant, nullable=True)
+    citation_telemetry_json: Mapped[dict[str, object] | None] = mapped_column(
+        JSONVariant, nullable=True
+    )
     model_used: Mapped[str | None] = mapped_column(String(128), nullable=True)
     prompt_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     completion_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

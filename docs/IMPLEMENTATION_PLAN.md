@@ -50,3 +50,9 @@ Work through these phases sequentially. Check off items only after running verif
   - System architecture diagram
   - Real evaluation metrics & failure analysis log
   - Cost-per-1,000-PRs breakdown
+
+## Phase 6: V1.1 Accuracy Fix & V2 Local-First Capabilities
+- [x] **Smart Priority Diff Truncation (`case_030` -> 30/30):** Upgraded `parse_unified_diff` / `prioritize_and_truncate_diff` (`apps/api/app/services/github.py`) and `AIAnalyzer.prepare_diff_for_prompt` (`apps/api/app/services/ai_analyzer.py`) to prioritize file hunks touching sensitive boundaries, high `in_degree` nodes, and exported signature changes before enforcing the 12,000-char token budget; added unit tests and re-ran benchmark to **30/30 full pass**.
+- [x] **Historical Architecture Drift Timeline:** Added `GET /api/repos/{repo_id}/graph?snapshot_id=...`, `GET /api/repos/{repo_id}/snapshots`, and `GET /api/repos/{repo_id}/snapshots/diff` (`apps/api/app/services/snapshot_diff.py` + `apps/api/app/api/routes/repos.py`), extended `demo_seeder.py` and `apps/web/src/lib/demo-data.ts` with `v1 -> v2` snapshots for `acme/saas-billing-platform`, added Zod schemas, and built the Drift Timeline slider/drawer + React Flow canvas diff highlights (`apps/web/src/components/drift-timeline-panel.tsx`).
+- [x] **Telemetry & Cost Analytics View:** Persisted `citation_telemetry_json` on `pr_analyses` (with Alembic migration `0002_add_citation_telemetry.py`), added `GET /api/telemetry/summary` (`apps/api/app/api/routes/telemetry.py`), and built the Telemetry modal (`apps/web/src/components/telemetry-modal.tsx`) with synced offline Demo Mode fallback.
+- [x] **Go Language Adapter (`tree-sitter-go`):** Added `tree-sitter-go` to `apps/api/pyproject.toml`, implemented `GoAdapter` + `load_go_module_path` (`apps/api/app/parser/go.py`), registered in `ParserRegistry` & `RepoIndexer`, and added parser + indexer tests.

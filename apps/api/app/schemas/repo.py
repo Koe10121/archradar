@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
@@ -98,3 +99,54 @@ class GraphResponse(BaseModel):
     edge_count: int
     nodes: list[GraphNodeDTO]
     edges: list[GraphEdgeDTO]
+
+
+class SnapshotSummary(BaseModel):
+    """Summary metadata for a single historical GraphSnapshot."""
+
+    id: UUID
+    repository_id: UUID
+    commit_sha: str
+    file_count: int
+    edge_count: int
+    status: str
+    created_at: datetime
+
+
+class SnapshotDiffEdgeDTO(BaseModel):
+    """Added or removed directed dependency edge between two snapshots."""
+
+    source_path: str
+    target_path: str
+    edge_type: str
+    imported_symbols: list[str] = Field(default_factory=list)
+
+
+class CentralityDeltaDTO(BaseModel):
+    """In-degree and out-degree delta for a file across two snapshots."""
+
+    path: str
+    module_group: str
+    language: str
+    from_in_degree: int
+    to_in_degree: int
+    in_degree_delta: int
+    from_out_degree: int
+    to_out_degree: int
+    out_degree_delta: int
+    status: Literal["added", "removed", "changed"]
+
+
+class SnapshotDiffResponse(BaseModel):
+    """Architectural diff comparing two GraphSnapshots of a repository."""
+
+    repository_id: UUID
+    from_snapshot: SnapshotSummary
+    to_snapshot: SnapshotSummary
+    added_files: list[str]
+    removed_files: list[str]
+    added_edges: list[SnapshotDiffEdgeDTO]
+    removed_edges: list[SnapshotDiffEdgeDTO]
+    centrality_deltas: list[CentralityDeltaDTO]
+    file_count_delta: int
+    edge_count_delta: int
