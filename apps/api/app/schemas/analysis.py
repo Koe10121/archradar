@@ -113,3 +113,11 @@ class PRAnalysisResponse(BaseModel):
     estimated_cost_usd: float
     latency_ms: int
     created_at: datetime
+
+
+class PRCommentResponse(BaseModel):
+    """Rendered GitHub Markdown PR comment preview for a persisted analysis."""
+
+    analysis_id: UUID
+    markdown: str
+    character_count: int = Field(ge=0)

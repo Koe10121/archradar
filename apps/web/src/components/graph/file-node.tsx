@@ -32,6 +32,8 @@ function formatLanguageTag(language: string): string {
   if (lower === "javascript") return "JS";
   if (lower === "python") return "PY";
   if (lower === "go") return "GO";
+  if (lower === "rust") return "RS";
+  if (lower === "java") return "JAVA";
   return lower.slice(0, 3).toUpperCase();
 }
 

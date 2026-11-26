@@ -6,8 +6,10 @@ import pytest
 
 from app.parser.base import AliasConfig, normalize_repo_path
 from app.parser.go import GoAdapter, load_go_module_path
+from app.parser.java import JavaAdapter
 from app.parser.python import PythonAdapter
 from app.parser.registry import ParserRegistry
+from app.parser.rust import RustAdapter
 from app.parser.typescript import TypeScriptAdapter, load_tsconfig_aliases
 
 
@@ -270,3 +272,158 @@ func (h *CheckoutHandler) parseBody() {}
     malformed = adapter.parse("internal/handlers/broken.go", "package handlers\nfunc Broken( {")
     assert malformed.has_syntax_errors is True
     assert malformed.package_name == "handlers"
+
+
+def test_rust_adapter_parses_mod_use_trees_and_pub_exports() -> None:
+    """RustAdapter extracts pub symbols, mod declarations, use trees, and crate/super paths."""
+    registry = ParserRegistry()
+    adapter = registry.get_adapter("src/billing/checkout.rs")
+    assert isinstance(adapter, RustAdapter)
+    assert ".rs" in registry.supported_extensions
+
+    known_files = {
+        "src/lib.rs",
+        "src/auth/mod.rs",
+        "src/auth/token.rs",
+        "src/billing/mod.rs",
+        "src/billing/checkout.rs",
+        "src/billing/helpers.rs",
+    }
+
+    source = """
+use std::collections::HashMap;
+use crate::auth::token::{verify_token, Claims as TokenClaims};
+pub use super::helpers::{self, format_cents};
+mod local_sub;
+
+pub fn create_checkout(tok: &str) -> bool {
+    verify_token(tok)
+}
+
+pub async fn sync_invoice() {}
+pub struct CheckoutSession { pub id: u64 }
+pub enum PaymentState { Pending, Paid }
+pub trait PaymentProcessor { fn charge(&self); }
+pub type Currency = String;
+fn private_helper() {}
+"""
+    parsed = adapter.parse("src/billing/checkout.rs", source)
+    assert parsed.language == "rust"
+    assert parsed.module_group == "src/billing"
+    assert not parsed.has_syntax_errors
+
+    export_kinds = {exp.name: exp.kind for exp in parsed.exports}
+    assert export_kinds == {
+        "create_checkout": "function",
+        "sync_invoice": "function",
+        "CheckoutSession": "struct",
+        "PaymentState": "enum",
+        "PaymentProcessor": "trait",
+        "Currency": "type",
+    }
+    assert "private_helper" not in export_kinds
+
+    resolved = [
+        target
+        for imp in parsed.imports
+        for target in adapter.resolve_import("src/billing/checkout.rs", imp, known_files)
+    ]
+    assert "src/auth/token.rs" in resolved
+    assert "src/billing/helpers.rs" in resolved
+    assert "src/billing/checkout.rs" not in resolved
+
+    # External std:: imports must not resolve to local files
+    std_imp = next(imp for imp in parsed.imports if imp.specifier.startswith("std::"))
+    assert adapter.resolve_import("src/billing/checkout.rs", std_imp, known_files) == []
+
+    # mod declarations in lib.rs resolve to mod.rs or <name>.rs
+    lib_parsed = adapter.parse("src/lib.rs", "pub mod auth;\npub mod billing;\n")
+    lib_resolved = [
+        target
+        for imp in lib_parsed.imports
+        for target in adapter.resolve_import("src/lib.rs", imp, known_files)
+    ]
+    assert sorted(lib_resolved) == ["src/auth/mod.rs", "src/billing/mod.rs"]
+    assert all(imp.edge_type == "re_export" for imp in lib_parsed.imports)
+
+    malformed = adapter.parse("src/broken.rs", "pub fn broken( {")
+    assert malformed.has_syntax_errors is True
+
+
+def test_java_adapter_parses_packages_imports_and_public_exports() -> None:
+    """JavaAdapter extracts package, regular/static/wildcard imports, and public types/methods."""
+    registry = ParserRegistry()
+    adapter = registry.get_adapter("src/main/java/com/acme/api/CheckoutController.java")
+    assert isinstance(adapter, JavaAdapter)
+    assert ".java" in registry.supported_extensions
+
+    known_files = {
+        "src/main/java/com/acme/auth/TokenService.java",
+        "src/main/java/com/acme/models/Invoice.java",
+        "src/main/java/com/acme/models/Subscription.java",
+        "src/main/java/com/acme/billing/BillingService.java",
+        "src/main/java/com/acme/api/CheckoutController.java",
+    }
+
+    source = """
+package com.acme.api;
+
+import java.util.List;
+import com.acme.auth.TokenService;
+import com.acme.models.*;
+import static com.acme.billing.BillingService.chargePlan;
+
+public class CheckoutController {
+    public String handleCheckout(String token) {
+        return token;
+    }
+
+    private void helper() {}
+}
+
+public interface CheckoutGateway {
+    void settle();
+}
+
+public enum CheckoutStatus {
+    OPEN,
+    CLOSED
+}
+
+public record CheckoutReceipt(String id) {}
+"""
+    parsed = adapter.parse("src/main/java/com/acme/api/CheckoutController.java", source)
+    assert parsed.language == "java"
+    assert parsed.package_name == "com.acme.api"
+    assert not parsed.has_syntax_errors
+
+    export_kinds = {exp.name: exp.kind for exp in parsed.exports}
+    assert export_kinds == {
+        "CheckoutController": "class",
+        "handleCheckout": "method",
+        "CheckoutGateway": "interface",
+        "settle": "method",
+        "CheckoutStatus": "enum",
+        "CheckoutReceipt": "record",
+    }
+    assert "helper" not in export_kinds
+
+    resolved = [
+        target
+        for imp in parsed.imports
+        for target in adapter.resolve_import(
+            "src/main/java/com/acme/api/CheckoutController.java", imp, known_files
+        )
+    ]
+    assert "src/main/java/com/acme/auth/TokenService.java" in resolved
+    assert "src/main/java/com/acme/models/Invoice.java" in resolved
+    assert "src/main/java/com/acme/models/Subscription.java" in resolved
+    assert "src/main/java/com/acme/billing/BillingService.java" in resolved
+    assert len(resolved) == 4
+
+    malformed = adapter.parse(
+        "src/main/java/com/acme/api/Broken.java",
+        "package com.acme.api;\npublic class Broken {",
+    )
+    assert malformed.has_syntax_errors is True
+    assert malformed.package_name == "com.acme.api"

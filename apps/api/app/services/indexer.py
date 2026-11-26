@@ -35,6 +35,7 @@ IGNORED_DIRS = frozenset(
         "__pycache__",
         "dist",
         "build",
+        "target",
         "coverage",
         ".mypy_cache",
         ".pytest_cache",

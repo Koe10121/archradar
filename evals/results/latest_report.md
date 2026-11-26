@@ -1,9 +1,9 @@
 # ArchRadar Evaluation Benchmark Report
 
-- **Generated:** 2026-11-26 13:58 UTC
+- **Generated:** 2026-11-26 14:22 UTC
 - **Benchmark Mode:** `deterministic + simulated-llm (offline reproducible; no GEMINI_API_KEY)`
-- **Fixtures Evaluated:** 3 repositories
-- **Golden PR Cases:** 30 cases across 5 categories
+- **Fixtures Evaluated:** 4 repositories
+- **Golden PR Cases:** 35 cases across 5 categories
 - **Reproduce:** `uv run --project apps/api python -m evals.run_benchmark --output evals/results/latest_report.md`
 
 ## 1. Headline Metrics
@@ -13,16 +13,16 @@
 | Import Resolution Precision | >= 98.0% | **100.0%** | PASS |
 | Import Resolution Recall | >= 98.0% | **100.0%** | PASS |
 | Blast-Radius Recall (<= 3 hops) | 100.0% | **100.0%** | PASS |
-| Post-Gate Phantom File Citations | 0.0% | **0.0%** (119 valid / 2 intercepted) | PASS |
+| Post-Gate Phantom File Citations | 0.0% | **0.0%** (135 valid / 3 intercepted) | PASS |
 | Subgraph Adherence | >= 95.0% | **100.0%** | PASS |
-| Risk Classification Agreement | >= 85.0% | **100.0%** (30/30 full pass) | PASS |
-| Critical/High Bug False Negative Rate | <= 5.0% | **0.0%** (0/6) | PASS |
+| Risk Classification Agreement | >= 85.0% | **100.0%** (35/35 full pass) | PASS |
+| Critical/High Bug False Negative Rate | <= 5.0% | **0.0%** (0/8) | PASS |
 | Breaking-Change Detection Accuracy | >= 85.0% | **100.0%** | PASS |
 | Documentation Drift Detection Accuracy | >= 85.0% | **100.0%** | PASS |
-| Deterministic AST + BFS Latency (Median / P95) | < 200 ms | **0.10 ms / 0.20 ms** | PASS |
-| End-to-End Pipeline Latency (Median / P95) | < 3,000 ms | **0.38 ms / 0.99 ms** | PASS |
-| Avg Tokens / PR (Prompt + Completion) | ~4,900 tok | **1283 + 216 tok** | PASS |
-| Estimated Cost / PR (1,000 PRs) | < $0.01 ($10.00) | **$0.000322 ($0.32 / 1k PRs)** | PASS |
+| Deterministic AST + BFS Latency (Median / P95) | < 200 ms | **0.08 ms / 0.17 ms** | PASS |
+| End-to-End Pipeline Latency (Median / P95) | < 3,000 ms | **0.36 ms / 0.70 ms** | PASS |
+| Avg Tokens / PR (Prompt + Completion) | ~4,900 tok | **1275 + 216 tok** | PASS |
+| Estimated Cost / PR (1,000 PRs) | < $0.01 ($10.00) | **$0.000321 ($0.32 / 1k PRs)** | PASS |
 
 ## 2. Deterministic Graph Accuracy by Fixture
 
@@ -31,18 +31,19 @@
 | `fixtures/mini_saas_ts` | 17 | 17 | 17 | 100.0% | 100.0% | 100.0% |
 | `fixtures/mini_edge_cases` | 11 | 11 | 11 | 100.0% | 100.0% | 100.0% |
 | `fixtures/mini_fastapi_py` | 14 | 14 | 14 | 100.0% | 100.0% | 100.0% |
+| `fixtures/mini_go_service` | 6 | 6 | 6 | 100.0% | 100.0% | 100.0% |
 
 ## 3. Category Breakdown
 
 | Category | Cases | Passed | Blast Recall | Risk Agreement | Breaking Acc | Doc-Drift Acc |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `benign_low_risk` | 7 | 7/7 | 100.0% | 100.0% | 100.0% | 100.0% |
-| `direct_1hop_break` | 7 | 7/7 | 100.0% | 100.0% | 100.0% | 100.0% |
-| `transitive_break` | 6 | 6/6 | 100.0% | 100.0% | 100.0% | 100.0% |
-| `doc_drift` | 5 | 5/5 | 100.0% | 100.0% | 100.0% | 100.0% |
-| `adversarial_edge` | 5 | 5/5 | 100.0% | 100.0% | 100.0% | 100.0% |
+| `benign_low_risk` | 8 | 8/8 | 100.0% | 100.0% | 100.0% | 100.0% |
+| `direct_1hop_break` | 8 | 8/8 | 100.0% | 100.0% | 100.0% | 100.0% |
+| `transitive_break` | 7 | 7/7 | 100.0% | 100.0% | 100.0% | 100.0% |
+| `doc_drift` | 6 | 6/6 | 100.0% | 100.0% | 100.0% | 100.0% |
+| `adversarial_edge` | 6 | 6/6 | 100.0% | 100.0% | 100.0% | 100.0% |
 
-## 4. Per-Case Results (All 30 Cases)
+## 4. Per-Case Results (All 35 Cases)
 
 | Case ID | Category | Expected Risk | Predicted | Blast Recall | Citations | Result | Notes |
 | :--- | :--- | :--- | :--- | ---: | ---: | :---: | :--- |
@@ -76,6 +77,11 @@
 | `case_028_adversarial_ts_circular_import` | `adversarial_edge` | medium..critical | medium | 100% | 3 (stripped 0) | PASS | ok |
 | `case_029_adversarial_py_circular_import` | `adversarial_edge` | medium..critical | medium | 100% | 3 (stripped 0) | PASS | ok |
 | `case_030_adversarial_massive_noisy_diff` | `adversarial_edge` | medium..critical | high | 100% | 5 (stripped 0) | PASS | ok |
+| `case_031_go_benign_formatter_refactor` | `benign_low_risk` | low | low | 100% | 3 (stripped 0) | PASS | ok |
+| `case_032_go_1hop_billing_signature` | `direct_1hop_break` | medium..critical | high | 100% | 3 (stripped 0) | PASS | ok |
+| `case_033_go_transitive_auth_token` | `transitive_break` | high..critical | critical | 100% | 4 (stripped 0) | PASS | ok |
+| `case_034_go_doc_drift_webhook_env` | `doc_drift` | medium..critical | high | 100% | 2 (stripped 0) | PASS | ok |
+| `case_035_go_adversarial_prompt_injection` | `adversarial_edge` | high..critical | critical | 100% | 4 (stripped 1) | PASS | gate_stripped=1 |
 
 ## 5. Known Limitations & Failure Log
 

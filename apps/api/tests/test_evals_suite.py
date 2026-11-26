@@ -1,4 +1,4 @@
-"""Automated regression test validating the 30-case evaluation dataset and runner."""
+"""Automated regression test validating the 35-case evaluation dataset and runner."""
 
 import json
 import sys
@@ -14,16 +14,18 @@ from evals.run_benchmark import run_benchmark_async  # noqa: E402
 
 
 def test_golden_dataset_structure_and_diffs() -> None:
-    """All 30 benchmark cases exist, cover 5 categories, and contain valid unified diffs."""
+    """All 35 benchmark cases exist, cover 5 categories, and contain valid unified diffs."""
     evals_root = _REPO_ROOT / "evals"
     datasets_dir = evals_root / "datasets"
     case_files = sorted(datasets_dir.glob("case_*.json"))
-    assert len(case_files) == 30
+    assert len(case_files) == 35
 
     categories: set[str] = set()
+    fixtures: set[str] = set()
     for case_file in case_files:
         payload = json.loads(case_file.read_text(encoding="utf-8"))
         categories.add(str(payload["category"]))
+        fixtures.add(str(payload["repo_fixture"]))
         fixture_dir = evals_root / str(payload["repo_fixture"])
         assert fixture_dir.is_dir(), f"Missing fixture {fixture_dir}"
         assert (fixture_dir / "ground_truth_graph.json").is_file()
@@ -37,10 +39,11 @@ def test_golden_dataset_structure_and_diffs() -> None:
         "doc_drift",
         "adversarial_edge",
     }
+    assert "fixtures/mini_go_service" in fixtures
 
 
 async def test_benchmark_simulated_thresholds() -> None:
-    """Running the 30-case suite in simulated mode meets all ArchRadar quality targets."""
+    """Running the 35-case suite in simulated mode meets all ArchRadar quality targets."""
     evals_root = _REPO_ROOT / "evals"
     datasets_dir = evals_root / "datasets"
 
@@ -51,13 +54,15 @@ async def test_benchmark_simulated_thresholds() -> None:
     )
 
     assert "ArchRadar Evaluation Benchmark Report" in report_md
-    assert summary["case_count"] == 30
-    assert summary["cases_passed"] == 30
-    assert summary["graph_precision"] >= 0.98
-    assert summary["graph_recall"] >= 0.98
+    assert "fixtures/mini_go_service" in report_md
+    assert summary["fixture_count"] == 4
+    assert summary["case_count"] == 35
+    assert summary["cases_passed"] == 35
+    assert summary["graph_precision"] == 1.0
+    assert summary["graph_recall"] == 1.0
     assert summary["blast_recall"] == 1.0
     assert summary["post_gate_phantom_rate"] == 0.0
-    assert summary["hallucinations_intercepted"] >= 2
+    assert summary["hallucinations_intercepted"] >= 3
     assert summary["risk_agreement"] == 1.0
     assert summary["breaking_accuracy"] == 1.0
     assert summary["doc_drift_accuracy"] >= 0.85

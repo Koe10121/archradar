@@ -18,11 +18,13 @@ from app.schemas.analysis import (
     BlastRadiusResult,
     CitationValidationTelemetry,
     PRAnalysisResponse,
+    PRCommentResponse,
 )
 from app.services.ai_analyzer import AIAnalyzer, GeminiLLMProvider, LLMProvider
 from app.services.blast_radius import BlastRadiusCalculator, EdgeSnapshot, NodeSnapshot
 from app.services.citation_validator import validate_report_citations
 from app.services.github import fetch_github_pr_diff, parse_unified_diff
+from app.services.pr_commenter import build_pr_comment_response
 
 router = APIRouter(prefix="/api", tags=["analyses"])
 
@@ -306,9 +308,7 @@ async def list_repository_analyses(
     return responses
 
 
-@router.get("/analyses/{analysis_id}", response_model=PRAnalysisResponse)
-async def get_analysis(analysis_id: UUID, request: Request) -> PRAnalysisResponse:
-    """Retrieve a persisted PR blast-radius and AI analysis report by ID."""
+async def _load_analysis_response(analysis_id: UUID, request: Request) -> PRAnalysisResponse:
     engine = cast(AsyncEngine, request.app.state.db_engine)
     session_factory = create_session_factory(engine)
 
@@ -358,3 +358,16 @@ async def get_analysis(analysis_id: UUID, request: Request) -> PRAnalysisRespons
         latency_ms=record.latency_ms,
         created_at=record.created_at,
     )
+
+
+@router.get("/analyses/{analysis_id}", response_model=PRAnalysisResponse)
+async def get_analysis(analysis_id: UUID, request: Request) -> PRAnalysisResponse:
+    """Retrieve a persisted PR blast-radius and AI analysis report by ID."""
+    return await _load_analysis_response(analysis_id, request)
+
+
+@router.get("/analyses/{analysis_id}/pr-comment", response_model=PRCommentResponse)
+async def get_analysis_pr_comment(analysis_id: UUID, request: Request) -> PRCommentResponse:
+    """Render a deterministic GitHub Markdown PR comment preview for a persisted analysis."""
+    analysis = await _load_analysis_response(analysis_id, request)
+    return build_pr_comment_response(analysis)

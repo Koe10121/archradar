@@ -4,7 +4,9 @@ import posixpath
 
 from app.parser.base import LanguageAdapter
 from app.parser.go import GoAdapter
+from app.parser.java import JavaAdapter
 from app.parser.python import PythonAdapter
+from app.parser.rust import RustAdapter
 from app.parser.typescript import TypeScriptAdapter
 
 
@@ -15,7 +17,13 @@ class ParserRegistry:
         resolved = (
             adapters
             if adapters is not None
-            else [TypeScriptAdapter(), PythonAdapter(), GoAdapter()]
+            else [
+                TypeScriptAdapter(),
+                PythonAdapter(),
+                GoAdapter(),
+                RustAdapter(),
+                JavaAdapter(),
+            ]
         )
         self._by_ext: dict[str, LanguageAdapter] = {}
         for adapter in resolved:

@@ -1,0 +1,22 @@
+{
+  "id": "case_033_go_transitive_auth_token",
+  "category": "transitive_break",
+  "title": "Add required expectedAudience parameter to Go VerifyToken",
+  "description": "Changing VerifyToken in internal/auth/token.go breaks internal/billing/service.go (1-hop) and transitively impacts internal/webhooks/handler.go and cmd/server/main.go (2-hop).",
+  "repo_fixture": "fixtures/mini_go_service",
+  "doc_files": ["README.md", "docs/ARCHITECTURE.md"],
+  "diff": "diff --git a/internal/auth/token.go b/internal/auth/token.go\nindex 1111111..2222222 100644\n--- a/internal/auth/token.go\n+++ b/internal/auth/token.go\n@@ -12,7 +12,7 @@ type Claims struct {\n \tTier   string\n }\n \n-func VerifyToken(token string) (Claims, error) {\n-\tif token == \"\" {\n+func VerifyToken(token string, expectedAudience string) (Claims, error) {\n+\tif token == \"\" || expectedAudience == \"\" {\n \t\treturn Claims{}, errors.New(\"missing token\")\n \t}\n",
+  "expected": {
+    "min_risk": "high",
+    "max_risk": "critical",
+    "breaking_change_detected": true,
+    "must_include_affected_files": [
+      "internal/auth/token.go",
+      "internal/billing/service.go",
+      "internal/webhooks/handler.go",
+      "cmd/server/main.go"
+    ],
+    "doc_drift_expected": false
+  },
+  "adversarial_phantom_probe": []
+}

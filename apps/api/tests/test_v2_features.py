@@ -1,6 +1,9 @@
-"""Tests for Historical Snapshot Diff API and Telemetry & Cost Analytics API."""
+"""Tests for Historical Snapshot Diff API, Telemetry Analytics, and PR Comment Bot."""
 
+import hashlib
+import hmac
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -10,7 +13,13 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from app.core.config import Settings
 from app.db.session import create_session_factory
 from app.main import create_app
-from app.schemas.analysis import BlastRadiusReport
+from app.schemas.analysis import (
+    BlastRadiusReport,
+    BlastRadiusResult,
+    ImpactedEdgeDetail,
+    PRAnalysisResponse,
+    PRCommentResponse,
+)
 from app.schemas.repo import RepoIndexResponse, SnapshotDiffResponse
 from app.schemas.telemetry import TelemetrySummaryResponse
 from app.services.ai_analyzer import LLMGenerationResult
@@ -20,6 +29,7 @@ from app.services.demo_seeder import (
     DEMO_BILLING_V1_SNAPSHOT_ID,
     seed_demo_data,
 )
+from app.services.pr_commenter import render_pr_comment
 
 
 class _HallucinatingMockLLM:
@@ -190,3 +200,143 @@ async def test_telemetry_summary_aggregates_seeded_and_intercepted_analyses(
         assert after.total_analyses == 4
         assert after.citation_gate_intercepts == 1
         assert after.models[0].model == "gemini-2.5-flash"
+
+
+def test_render_pr_comment_deterministic_only_and_raw_patch() -> None:
+    """render_pr_comment handles deterministic-only (ai_report=None) and Mermaid subgraphs."""
+    analysis = PRAnalysisResponse(
+        id=uuid4(),
+        repository_id=uuid4(),
+        snapshot_id=uuid4(),
+        pr_number=77,
+        pr_title="Harden token audience check",
+        changed_files=["src/lib/token.ts"],
+        blast_radius=BlastRadiusResult(
+            direct=["src/lib/token.ts"],
+            hop_1=["src/middleware/auth.ts"],
+            hop_2=["src/routes/checkout.ts"],
+            hop_3=[],
+            score=62,
+            deterministic_risk="high",
+            max_in_degree=2,
+            sensitive_boundaries_touched=["auth", "middleware"],
+            symbol_matched_files=["src/middleware/auth.ts"],
+            impacted_edges=[
+                ImpactedEdgeDetail(
+                    source="src/middleware/auth.ts",
+                    target="src/lib/token.ts",
+                    edge_type="import",
+                    imported_symbols=["verifyToken"],
+                    symbol_match=True,
+                )
+            ],
+        ),
+        ai_report=None,
+        citation_telemetry=None,
+        model_used=None,
+        prompt_tokens=0,
+        completion_tokens=0,
+        estimated_cost_usd=0.0,
+        latency_ms=12,
+        created_at=datetime.now(UTC),
+    )
+
+    markdown = render_pr_comment(analysis)
+    assert "## ArchRadar Blast-Radius Report" in markdown
+    assert "#77 — Harden token audience check" in markdown
+    assert "**Risk:** `HIGH`" in markdown
+    assert "**Score:** `62/100`" in markdown
+    assert "**Breaking:** `YES`" in markdown
+    assert "```mermaid" in markdown
+    assert "flowchart LR" in markdown
+    assert 'N1["src/middleware/auth.ts"]' in markdown
+    assert 'N1 -->|"verifyToken"| N0' in markdown
+    assert "`deterministic-only`" in markdown
+
+
+async def test_pr_comment_endpoint_and_webhook_dry_run_preview(
+    sqlite_engine: AsyncEngine,
+) -> None:
+    """GET /api/analyses/{id}/pr-comment and webhook dry-run return verified Markdown."""
+    session_factory = create_session_factory(sqlite_engine)
+    async with session_factory() as session:
+        await seed_demo_data(session)
+
+    secret = "dry-run-webhook-secret"
+    settings = Settings(
+        environment="test",
+        log_level="WARNING",
+        database_url="sqlite+aiosqlite:///:memory:",
+        github_webhook_secret=secret,
+    )
+    app = create_app(settings=settings, db_engine=sqlite_engine)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        analyses_resp = await client.get(f"/api/repos/{DEMO_BILLING_REPO_ID}/analyses")
+        assert analyses_resp.status_code == 200
+        analyses = analyses_resp.json()
+        pr42 = next(item for item in analyses if item["pr_number"] == 42)
+
+        comment_resp = await client.get(f"/api/analyses/{pr42['id']}/pr-comment")
+        assert comment_resp.status_code == 200
+        comment = PRCommentResponse.model_validate(comment_resp.json())
+        assert comment.character_count == len(comment.markdown)
+        assert "**Risk:** `CRITICAL`" in comment.markdown
+        assert "```mermaid" in comment.markdown
+        assert "src/middleware/auth.ts" in comment.markdown
+        assert "### Impacted Flows" in comment.markdown
+        assert "### Documentation Drift Alerts" in comment.markdown
+        assert "### Reviewer Checklist" in comment.markdown
+
+        missing_resp = await client.get(f"/api/analyses/{uuid4()}/pr-comment")
+        assert missing_resp.status_code == 404
+
+        # Webhook dry-run on seeded repo/PR returns persisted comment preview without network calls
+        webhook_payload = json.dumps(
+            {
+                "action": "opened",
+                "repository": {"full_name": "acme/saas-billing-platform"},
+                "pull_request": {"number": 42},
+                "dry_run": True,
+            }
+        ).encode("utf-8")
+        digest = hmac.new(secret.encode("utf-8"), webhook_payload, hashlib.sha256).hexdigest()
+        wh_resp = await client.post(
+            "/api/webhooks/github",
+            content=webhook_payload,
+            headers={
+                "X-Hub-Signature-256": f"sha256={digest}",
+                "X-GitHub-Event": "pull_request",
+            },
+        )
+        assert wh_resp.status_code == 202
+        wh_data = wh_resp.json()
+        assert wh_data["comment_mode"] == "dry_run"
+        assert wh_data["comment_posted"] is False
+        assert wh_data["comment_character_count"] == comment.character_count
+        assert "## ArchRadar Blast-Radius Report" in wh_data["comment_preview"]
+
+        # Unknown repo dry-run falls back cleanly to pending dry-run placeholder
+        pending_payload = json.dumps(
+            {
+                "action": "synchronize",
+                "repository": {"full_name": "acme/unindexed-repo"},
+                "pull_request": {"number": 9},
+            }
+        ).encode("utf-8")
+        pending_sig = hmac.new(
+            secret.encode("utf-8"), pending_payload, hashlib.sha256
+        ).hexdigest()
+        pending_resp = await client.post(
+            "/api/webhooks/github",
+            content=pending_payload,
+            headers={
+                "X-Hub-Signature-256": f"sha256={pending_sig}",
+                "X-GitHub-Event": "pull_request",
+                "X-ArchRadar-Dry-Run": "true",
+            },
+        )
+        assert pending_resp.status_code == 202
+        pending_data = pending_resp.json()
+        assert pending_data["comment_posted"] is False
+        assert "Dry-Run Pending" in pending_data["comment_preview"]

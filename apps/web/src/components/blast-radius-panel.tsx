@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   AlertTriangle,
   Check,
@@ -10,6 +10,8 @@ import {
   EyeOff,
   FileWarning,
   Flame,
+  Loader2,
+  MessageSquareCode,
   ShieldCheck,
   Square,
   X,
@@ -17,11 +19,14 @@ import {
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { fetchAnalysisPrComment } from "@/lib/api";
+import { renderPRCommentMarkdown } from "@/lib/pr-comment";
 import { type PRAnalysisResponse, type RiskLevel } from "@/lib/schemas/analysis";
 
 interface BlastRadiusPanelProps {
   analysis: PRAnalysisResponse | null;
   overlayActive: boolean;
+  isOfflineDemo?: boolean;
   onToggleOverlay: () => void;
   onClearAnalysis: () => void;
   onFocusPaths: (paths: string[]) => void;
@@ -38,12 +43,25 @@ function riskBadgeVariant(
 export function BlastRadiusPanel({
   analysis,
   overlayActive,
+  isOfflineDemo = false,
   onToggleOverlay,
   onClearAnalysis,
   onFocusPaths,
 }: BlastRadiusPanelProps): React.JSX.Element {
   const [copiedPatchIndex, setCopiedPatchIndex] = useState<number | null>(null);
   const [checkedItems, setCheckedItems] = useState<Record<number, boolean>>({});
+  const [commentPreviewOpen, setCommentPreviewOpen] = useState(false);
+  const [commentMarkdown, setCommentMarkdown] = useState<string | null>(null);
+  const [commentLoading, setCommentLoading] = useState(false);
+  const [commentCopied, setCommentCopied] = useState(false);
+
+  const analysisId = analysis?.id ?? null;
+  useEffect(() => {
+    setCommentPreviewOpen(false);
+    setCommentMarkdown(null);
+    setCommentLoading(false);
+    setCommentCopied(false);
+  }, [analysisId]);
 
   if (!analysis) {
     return (
@@ -70,6 +88,45 @@ export function BlastRadiusPanel({
       console.error("[archradar-web] Failed to copy markdown patch", err);
     }
   }
+
+  async function handleToggleCommentPreview(): Promise<void> {
+    if (!analysis) return;
+    if (commentPreviewOpen) {
+      setCommentPreviewOpen(false);
+      return;
+    }
+
+    setCommentPreviewOpen(true);
+    if (commentMarkdown !== null) return;
+
+    if (isOfflineDemo) {
+      setCommentMarkdown(renderPRCommentMarkdown(analysis));
+      return;
+    }
+
+    setCommentLoading(true);
+    const res = await fetchAnalysisPrComment(analysis.id);
+    setCommentLoading(false);
+    if (res.ok) {
+      setCommentMarkdown(res.data.markdown);
+    } else {
+      setCommentMarkdown(renderPRCommentMarkdown(analysis));
+    }
+  }
+
+  async function handleCopyCommentMarkdown(): Promise<void> {
+    if (!analysis) return;
+    const text = commentMarkdown ?? renderPRCommentMarkdown(analysis);
+    try {
+      await navigator.clipboard.writeText(text);
+      setCommentCopied(true);
+      window.setTimeout(() => setCommentCopied(false), 1800);
+    } catch (err) {
+      console.error("[archradar-web] Failed to copy GitHub PR comment markdown", err);
+    }
+  }
+
+  const resolvedCommentMarkdown = commentMarkdown ?? renderPRCommentMarkdown(analysis);
 
   return (
     <div className="flex flex-col gap-4 p-4 text-sm">
@@ -116,6 +173,16 @@ export function BlastRadiusPanel({
                 Overlay Off
               </>
             )}
+          </Button>
+
+          <Button
+            size="sm"
+            variant={commentPreviewOpen ? "default" : "outline"}
+            className="h-7 px-2.5 text-xs"
+            onClick={() => void handleToggleCommentPreview()}
+          >
+            <MessageSquareCode className="h-3.5 w-3.5" />
+            PR Comment Preview
           </Button>
 
           {telemetry && (
@@ -178,6 +245,45 @@ export function BlastRadiusPanel({
           </div>
         )}
       </div>
+
+      {commentPreviewOpen && (
+        <div className="space-y-2 rounded-lg border border-sky-500/30 bg-slate-950/70 p-3 text-xs">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <span className="font-semibold text-sky-300">GitHub PR Comment Preview</span>
+              <Badge variant="secondary">{resolvedCommentMarkdown.length} chars</Badge>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-6 px-2 text-[11px]"
+              onClick={() => void handleCopyCommentMarkdown()}
+            >
+              {commentCopied ? (
+                <>
+                  <Check className="h-3 w-3 text-emerald-400" />
+                  Copied
+                </>
+              ) : (
+                <>
+                  <Copy className="h-3 w-3" />
+                  Copy GitHub Markdown
+                </>
+              )}
+            </Button>
+          </div>
+          {commentLoading ? (
+            <div className="flex items-center gap-2 py-3 text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-sky-400" />
+              Rendering PR comment Markdown...
+            </div>
+          ) : (
+            <pre className="max-h-72 overflow-auto rounded border border-border bg-slate-950 p-2.5 font-mono text-[11px] leading-relaxed text-slate-200 whitespace-pre-wrap">
+              {resolvedCommentMarkdown}
+            </pre>
+          )}
+        </div>
+      )}
 
       {report ? (
         <>

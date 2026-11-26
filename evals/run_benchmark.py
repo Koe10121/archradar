@@ -26,7 +26,8 @@ if str(_API_ROOT) not in sys.path:
     sys.path.insert(0, str(_API_ROOT))
 
 from app.core.config import get_settings  # noqa: E402
-from app.parser.base import ParsedFile  # noqa: E402
+from app.parser.base import AliasConfig, ParsedFile  # noqa: E402
+from app.parser.go import load_go_module_path  # noqa: E402
 from app.parser.registry import ParserRegistry  # noqa: E402
 from app.parser.typescript import load_tsconfig_aliases  # noqa: E402
 from app.schemas.analysis import (  # noqa: E402
@@ -66,9 +67,11 @@ _ROUTE_EXPORT_RE = re.compile(
 )
 _INJECTED_PATH_RE = re.compile(
     r"(?:IGNORE\s+ALL\s+PREVIOUS\s+INSTRUCTIONS|SYSTEM\s+OVERRIDE)[^\n]*?"
-    r"((?:src|app)/[A-Za-z0-9_./-]+\.(?:ts|tsx|js|jsx|py))",
+    r"((?:src|app|internal|cmd|pkg)/[A-Za-z0-9_./-]+\.(?:ts|tsx|js|jsx|py|go|rs|java))",
     re.IGNORECASE,
 )
+_GO_EXPORTED_FUNC_RE = re.compile(r"^\s*func\s+(?:\([^)]*\)\s*)?[A-Z][A-Za-z0-9_]*\s*\(")
+_GO_EXPORTED_TYPE_RE = re.compile(r"^\s*type\s+[A-Z][A-Za-z0-9_]*\b")
 
 
 @dataclass(frozen=True)
@@ -319,7 +322,13 @@ class SimulatedGroundedLLMProvider:
             "async def ",
             "class ",
         )
-        removed_sigs = [line for line in removed_lines if any(tok in line for tok in sig_tokens)]
+        removed_sigs = [
+            line
+            for line in removed_lines
+            if any(tok in line for tok in sig_tokens)
+            or _GO_EXPORTED_FUNC_RE.match(line)
+            or _GO_EXPORTED_TYPE_RE.match(line)
+        ]
         if removed_sigs:
             return True
 
@@ -505,7 +514,13 @@ def index_fixture_directory(fixture_dir: Path, fixture_key: str) -> FixtureGraph
         source_entries.append((rel_posix, path))
 
     known_files = {rel_path for rel_path, _ in source_entries}
-    alias_config = load_tsconfig_aliases(resolved_root)
+    ts_aliases = load_tsconfig_aliases(resolved_root)
+    go_module_path = load_go_module_path(resolved_root)
+    alias_config = AliasConfig(
+        base_url=ts_aliases.base_url,
+        paths=ts_aliases.paths,
+        go_module_path=go_module_path,
+    )
 
     parsed_by_path: dict[str, ParsedFile] = {}
     for rel_path, abs_path in source_entries:
@@ -1040,7 +1055,7 @@ def _render_markdown_report(
     lines.extend(
         [
             "",
-            "## 4. Per-Case Results (All 30 Cases)",
+            f"## 4. Per-Case Results (All {summary['case_count']} Cases)",
             "",
             "| Case ID | Category | Expected Risk | Predicted | Blast Recall "
             "| Citations | Result | Notes |",
@@ -1120,7 +1135,7 @@ def _render_markdown_report(
 
 def main() -> None:
     """CLI entrypoint for running the ArchRadar evaluation suite."""
-    parser = argparse.ArgumentParser(description="Run ArchRadar 30-case evaluation benchmark.")
+    parser = argparse.ArgumentParser(description="Run ArchRadar evaluation benchmark.")
     parser.add_argument(
         "--output",
         default="evals/results/latest_report.md",

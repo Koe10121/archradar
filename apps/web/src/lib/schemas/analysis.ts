@@ -76,6 +76,12 @@ export const PRAnalysisResponseSchema = z.object({
 
 export const PRAnalysisListSchema = z.array(PRAnalysisResponseSchema);
 
+export const PRCommentResponseSchema = z.object({
+  analysis_id: z.string(),
+  markdown: z.string(),
+  character_count: z.number().int().nonnegative(),
+});
+
 export type RiskLevel = z.infer<typeof RiskLevelSchema>;
 export type ImpactedFlow = z.infer<typeof ImpactedFlowSchema>;
 export type DocDriftAlert = z.infer<typeof DocDriftAlertSchema>;
@@ -84,3 +90,4 @@ export type ImpactedEdgeDetail = z.infer<typeof ImpactedEdgeDetailSchema>;
 export type BlastRadiusResult = z.infer<typeof BlastRadiusResultSchema>;
 export type CitationValidationTelemetry = z.infer<typeof CitationValidationTelemetrySchema>;
 export type PRAnalysisResponse = z.infer<typeof PRAnalysisResponseSchema>;
+export type PRCommentResponse = z.infer<typeof PRCommentResponseSchema>;

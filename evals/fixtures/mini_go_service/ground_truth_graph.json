@@ -1,0 +1,10 @@
+{
+  "edges": [
+    ["internal/billing/service.go", "internal/auth/token.go"],
+    ["internal/webhooks/handler.go", "internal/billing/formatter.go"],
+    ["internal/webhooks/handler.go", "internal/billing/service.go"],
+    ["cmd/server/main.go", "internal/billing/formatter.go"],
+    ["cmd/server/main.go", "internal/billing/service.go"],
+    ["cmd/server/main.go", "internal/webhooks/handler.go"]
+  ]
+}

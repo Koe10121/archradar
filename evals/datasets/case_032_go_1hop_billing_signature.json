@@ -1,0 +1,21 @@
+{
+  "id": "case_032_go_1hop_billing_signature",
+  "category": "direct_1hop_break",
+  "title": "Add required idempotencyKey parameter to Go ChargeSubscription",
+  "description": "Exported function signature change in internal/billing/service.go breaks 1-hop caller cmd/server/main.go and touches internal/webhooks/handler.go.",
+  "repo_fixture": "fixtures/mini_go_service",
+  "doc_files": ["README.md", "docs/ARCHITECTURE.md"],
+  "diff": "diff --git a/internal/billing/service.go b/internal/billing/service.go\nindex 1111111..2222222 100644\n--- a/internal/billing/service.go\n+++ b/internal/billing/service.go\n@@ -11,8 +11,8 @@ type Invoice struct {\n \tAmountCents int64\n }\n \n-func ChargeSubscription(token string, planID string) (Invoice, error) {\n-\tclaims, err := auth.VerifyToken(token)\n+func ChargeSubscription(token string, planID string, idempotencyKey string) (Invoice, error) {\n+\tclaims, err := auth.VerifyToken(token)\n \tif err != nil {\n \t\treturn Invoice{}, err\n \t}\n",
+  "expected": {
+    "min_risk": "medium",
+    "max_risk": "critical",
+    "breaking_change_detected": true,
+    "must_include_affected_files": [
+      "internal/billing/service.go",
+      "internal/webhooks/handler.go",
+      "cmd/server/main.go"
+    ],
+    "doc_drift_expected": false
+  },
+  "adversarial_phantom_probe": []
+}

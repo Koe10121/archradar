@@ -623,6 +623,7 @@ export function ArchRadarWorkspace({
               <BlastRadiusPanel
                 analysis={activeAnalysis}
                 overlayActive={blastOverlayActive}
+                isOfflineDemo={isOfflineDemo}
                 onToggleOverlay={() => {
                   setBlastOverlayActive((prev) => {
                     const next = !prev;

@@ -1,13 +1,13 @@
 # ArchRadar — Living Architecture Mapper & PR Blast-Radius Radar
 
 **Deterministic Tree-sitter AST dependency graphs meet grounded AI risk analysis for Pull Requests.**  
-Instead of asking an LLM to guess how files connect, ArchRadar parses TypeScript/JavaScript, Python, and Go repositories into a relational dependency graph, computes the exact multi-hop reverse-BFS blast radius, tracks historical snapshot architecture drift, and constrains Gemini structured outputs to verified graph citations.
+Instead of asking an LLM to guess how files connect, ArchRadar parses TypeScript/JavaScript, Python, Go, Rust, and Java repositories into a relational dependency graph, computes the exact multi-hop reverse-BFS blast radius, tracks historical snapshot architecture drift, renders ready-to-post GitHub PR Comment Markdown with Mermaid subgraphs, and constrains Gemini structured outputs to verified graph citations.
 
 ![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?logo=fastapi&logoColor=white)
 ![Next.js 15](https://img.shields.io/badge/Next.js-15-000000?logo=nextdotjs&logoColor=white)
 ![Tree-sitter](https://img.shields.io/badge/Tree--sitter-AST-2E8B57)
-![License](https://img.shields.io/badge/Evaluated-30%20Golden%20PRs-F59E0B)
+![License](https://img.shields.io/badge/Evaluated-35%20Golden%20PRs-F59E0B)
 
 ---
 
@@ -40,7 +40,7 @@ Instead of asking an LLM to guess how files connect, ArchRadar parses TypeScript
 flowchart TD
     GH["GitHub Repo / PR / HMAC Webhook"] --> API["FastAPI Ingestion & REST API"]
     API -->|"HMAC-SHA256 Check"| WH["Webhook Route (/api/webhooks/github)"]
-    API --> IDX["Tree-sitter AST Indexer (TS, JS, Python, Go)"]
+    API --> IDX["Tree-sitter AST Indexer (TS, JS, Python, Go, Rust, Java)"]
     IDX -->|"Nodes, Exports, Edges"| DB[("PostgreSQL 16 / SQLite Async")]
     API --> DIFF["Priority Diff Parser (unidiff + Path Guard)"]
     DIFF --> BFS["Reverse-BFS Blast-Radius Calculator (Depth <= 3)"]
@@ -48,22 +48,35 @@ flowchart TD
     BFS -->|"Bounded Subgraph + Diff + Docs"| AI["Gemini Structured Analyzer (BlastRadiusReport)"]
     AI --> GATE["Post-LLM Citation Verification Gate"]
     GATE -->|"Strips Phantom Files + Telemetry"| DB
+    DB --> BOT["PR Comment Bot Renderer (Markdown + Mermaid)"]
     DB --> WEB["Next.js 15 + React Flow Canvas"]
-    WEB -->|"Dagre Layout, Drift Timeline & Blast Heatmap"| UI["Node Inspector, Drift & Telemetry UI"]
+    BOT --> WEB
+    WEB -->|"Dagre Layout, Drift Timeline & Blast Heatmap"| UI["Node Inspector, PR Comment & Telemetry UI"]
 ```
 
+### Supported Languages Matrix
+
+| Language | Extensions | Tree-sitter Grammar | Exports Extracted | Import & Path Resolution |
+| :--- | :--- | :--- | :--- | :--- |
+| **TypeScript / JavaScript** | `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs` | `tree-sitter-typescript`, `tree-sitter-javascript` | Exported `function`, `class`, `interface`, `type`, `enum`, `const`, barrel re-exports | Relative paths, ESM `.js`→`.ts`, `tsconfig.json` `@/` aliases, `index.*` barrels, `require()` & static `import()` |
+| **Python** | `.py` | `tree-sitter-python` | Public top-level `def`, `async def`, `class` (including decorated definitions) | Absolute dotted imports, relative `.` / `..` imports, `__init__.py` packages |
+| **Go** | `.go` | `tree-sitter-go` | Exported capitalized `func`, methods, `struct`, `interface`, type aliases | `go.mod` module-path package resolution (ignores `_test.go` & stdlib/third-party) |
+| **Rust** | `.rs` | `tree-sitter-rust` | `pub fn`, `pub async fn`, `pub struct`, `pub enum`, `pub trait`, `pub type` | `mod` / `pub mod` declarations, nested `use` trees (`crate::`, `super::`, `self::`), `lib.rs` / `main.rs` / `mod.rs` |
+| **Java** | `.java` | `tree-sitter-java` | `public class`, `interface`, `enum`, `record`, and `public` methods | `package` declarations, regular/wildcard/static imports mapped to `.java` source files |
+
 ### Core Engineering Highlights
-1. **Deterministic-First Multi-Language Graph Engine:** Tree-sitter (`tree-sitter-typescript`, `tree-sitter-javascript`, `tree-sitter-python`, `tree-sitter-go`) parses source files read-only (never executing target repository code) to extract exported symbols, `tsconfig.json` `@/` path aliases, `go.mod` module-path imports, barrel re-exports (`index.ts`, `__init__.py`), and relative imports.
+1. **Deterministic-First Multi-Language Graph Engine:** Tree-sitter (`tree-sitter-typescript`, `tree-sitter-javascript`, `tree-sitter-python`, `tree-sitter-go`, `tree-sitter-rust`, `tree-sitter-java`) parses source files read-only (never executing target repository code) to extract exported symbols, `tsconfig.json` `@/` path aliases, `go.mod` module-path imports, Rust `crate::`/`super::`/`mod.rs` modules, Java package imports, barrel re-exports (`index.ts`, `__init__.py`), and relative imports.
 2. **Reverse-BFS Blast Radius + Smart Priority Diff Truncation:** Given modified files and symbols from a unified diff, `BlastRadiusCalculator` traverses reverse dependency edges up to depth 3, while `prioritize_and_truncate_diff` ranks hunks by sensitive boundaries, `in_degree` centrality, and exported signature changes before enforcing the 12,000-character token budget.
-3. **Historical Architecture Drift Timeline & Cost Telemetry:** Compare any two indexed snapshots (`GET /api/repos/{id}/snapshots/diff`) with interactive timeline scrubbing and React Flow overlays for added nodes, removed edges, and coupling (`in_degree`) deltas, plus live cost/latency/citation-gate analytics (`GET /api/telemetry/summary`).
-4. **Zero-Phantom Citation Gate:** Every file path cited in `AIAnalyzer` outputs (`entry_file`, `affected_files`) is verified against the repository's indexed `file_nodes` snapshot before persistence. Any unverified path is stripped and logged via `CitationValidationTelemetry`.
-5. **End-to-End Schema Contracts & Security:** Backend outputs validate against strict Pydantic v2 models (`apps/api/app/schemas/`); frontend API boundaries validate every response with Zod (`apps/web/src/lib/schemas/`); `POST /api/webhooks/github` verifies `X-Hub-Signature-256` with constant-time `hmac.compare_digest` prior to parsing JSON.
+3. **GitHub PR Comment Bot & Dry-Run Preview:** `pr_commenter.py` (with a synced offline TypeScript renderer in `apps/web/src/lib/pr-comment.ts`) formats deterministic GitHub Markdown PR comments featuring risk/score badges, a hop-tier table, a Mermaid `flowchart LR` mini-subgraph of direct + 1-hop edges, verified impacted flows, doc-drift patches, and a reviewer checklist (`GET /api/analyses/{id}/pr-comment` and webhook dry-run previews).
+4. **Historical Architecture Drift Timeline & Cost Telemetry:** Compare any two indexed snapshots (`GET /api/repos/{id}/snapshots/diff`) with interactive timeline scrubbing and React Flow overlays for added nodes, removed edges, and coupling (`in_degree`) deltas, plus live cost/latency/citation-gate analytics (`GET /api/telemetry/summary`).
+5. **Zero-Phantom Citation Gate:** Every file path cited in `AIAnalyzer` outputs (`entry_file`, `affected_files`) is verified against the repository's indexed `file_nodes` snapshot before persistence. Any unverified path is stripped and logged via `CitationValidationTelemetry`.
+6. **End-to-End Schema Contracts & Security:** Backend outputs validate against strict Pydantic v2 models (`apps/api/app/schemas/`); frontend API boundaries validate every response with Zod (`apps/web/src/lib/schemas/`) verified by Vitest; `POST /api/webhooks/github` verifies `X-Hub-Signature-256` with constant-time `hmac.compare_digest` prior to parsing JSON.
 
 ---
 
 ## Evaluation Benchmark Results
 
-ArchRadar includes a 30-case golden benchmark suite in [`evals/`](evals/) across 3 self-contained repository fixtures (`mini_saas_ts`, `mini_fastapi_py`, `mini_edge_cases`) and 5 test categories.
+ArchRadar includes a 35-case golden benchmark suite in [`evals/`](evals/) across 4 self-contained repository fixtures (`mini_saas_ts`, `mini_fastapi_py`, `mini_edge_cases`, `mini_go_service`) and 5 test categories.
 
 - **Latest Report:** [`evals/results/latest_report.md`](evals/results/latest_report.md)
 - **Measured Mode:** `deterministic + simulated-llm (offline reproducible; no GEMINI_API_KEY)`
@@ -78,28 +91,28 @@ ArchRadar includes a 30-case golden benchmark suite in [`evals/`](evals/) across
 
 | Metric | Target | Measured | Status |
 | :--- | :--- | :--- | :---: |
-| Import Resolution Precision (42/42 edges) | >= 98.0% | **100.0%** | PASS |
-| Import Resolution Recall (42/42 edges) | >= 98.0% | **100.0%** | PASS |
+| Import Resolution Precision (48/48 edges) | >= 98.0% | **100.0%** | PASS |
+| Import Resolution Recall (48/48 edges) | >= 98.0% | **100.0%** | PASS |
 | Blast-Radius Recall (<= 3 hops) | 100.0% | **100.0%** | PASS |
-| Post-Gate Phantom File Citations | 0.0% | **0.0%** (119 valid / 2 intercepted) | PASS |
+| Post-Gate Phantom File Citations | 0.0% | **0.0%** (135 valid / 3 intercepted) | PASS |
 | Subgraph Adherence | >= 95.0% | **100.0%** | PASS |
-| Risk Classification Agreement | >= 85.0% | **100.0%** (30/30 full pass) | PASS |
-| Critical/High Bug False Negative Rate | <= 5.0% | **0.0%** (0/6) | PASS |
+| Risk Classification Agreement | >= 85.0% | **100.0%** (35/35 full pass) | PASS |
+| Critical/High Bug False Negative Rate | <= 5.0% | **0.0%** (0/8) | PASS |
 | Breaking-Change Detection Accuracy | >= 85.0% | **100.0%** | PASS |
 | Documentation Drift Detection Accuracy | >= 85.0% | **100.0%** | PASS |
-| Deterministic AST + BFS Latency (Median / P95) | < 200 ms | **0.10 ms / 0.20 ms** | PASS |
-| End-to-End Pipeline Latency (Median / P95) | < 3,000 ms | **0.38 ms / 0.99 ms** | PASS |
-| Avg Tokens / PR (Prompt + Completion) | ~4,900 tok | **1,283 + 216 tok** | PASS |
+| Deterministic AST + BFS Latency (Median / P95) | < 200 ms | **0.08 ms / 0.17 ms** | PASS |
+| End-to-End Pipeline Latency (Median / P95) | < 3,000 ms | **0.36 ms / 0.70 ms** | PASS |
+| Avg Tokens / PR (Prompt + Completion) | ~4,900 tok | **1,275 + 216 tok** | PASS |
 
 ### Category Breakdown
 
 | Category | Cases | Full Pass | Blast Recall | Risk Agreement | Breaking Acc | Doc-Drift Acc |
 | :--- | ---: | :---: | ---: | ---: | ---: | ---: |
-| `benign_low_risk` | 7 | 7/7 | 100.0% | 100.0% | 100.0% | 100.0% |
-| `direct_1hop_break` | 7 | 7/7 | 100.0% | 100.0% | 100.0% | 100.0% |
-| `transitive_break` | 6 | 6/6 | 100.0% | 100.0% | 100.0% | 100.0% |
-| `doc_drift` | 5 | 5/5 | 100.0% | 100.0% | 100.0% | 100.0% |
-| `adversarial_edge` | 5 | 5/5 | 100.0% | 100.0% | 100.0% | 100.0% |
+| `benign_low_risk` | 8 | 8/8 | 100.0% | 100.0% | 100.0% | 100.0% |
+| `direct_1hop_break` | 8 | 8/8 | 100.0% | 100.0% | 100.0% | 100.0% |
+| `transitive_break` | 7 | 7/7 | 100.0% | 100.0% | 100.0% | 100.0% |
+| `doc_drift` | 6 | 6/6 | 100.0% | 100.0% | 100.0% | 100.0% |
+| `adversarial_edge` | 6 | 6/6 | 100.0% | 100.0% | 100.0% | 100.0% |
 
 ---
 
@@ -112,7 +125,7 @@ We track benchmark improvements and architectural boundaries openly from [`evals
    - *After (V1.1 Smart Priority Diff Truncation):* `prioritize_and_truncate_diff` and `AIAnalyzer.prepare_diff_for_prompt` score each hunk by sensitive boundaries, graph `in_degree`, exported signature edits, and non-comment signal before enforcing the 12,000-character budget. `src/lib/crypto.ts` is promoted ahead of comment noise, resolving `case_030` (`risk=high`, `breaking=True`) and lifting the suite to **30/30 (100.0%)** while preserving the \$0.32 / 1,000 PRs token budget.
 2. **Computed Dynamic Imports:** Static `import('./plugin')` and `require('./legacy')` inside functions resolve at 100% accuracy (including after fixing an early-return bug in `TypeScriptAdapter._walk_node` discovered by this benchmark), whereas runtime-computed template imports like ``import(`./plugins/${name}`)`` cannot be resolved statically without executing target code.
 3. **Depth-0 Symbol Matching Across Barrel Re-Exports:** Symbol-overlap precision filtering runs on direct edges at depth 0 (`changed_symbols_by_file`), then widens to file-level BFS at hops 1–3 so barrel chains (`leaf.ts -> sub/index.ts -> index.ts -> caller.ts`) are never dropped.
-4. **Offline Simulator vs. Live Model Variance:** Offline runs use `SimulatedGroundedLLMProvider` over the exact bounded prompt (`user_prompt` JSON subgraph + prioritized diff + doc excerpts) to verify prompt-injection resistance, citation stripping (2/2 probes intercepted), and pipeline contracts reproducibly without network calls. Live Gemini numbers vary with model version and temperature.
+4. **Offline Simulator vs. Live Model Variance:** Offline runs use `SimulatedGroundedLLMProvider` over the exact bounded prompt (`user_prompt` JSON subgraph + prioritized diff + doc excerpts) to verify prompt-injection resistance, citation stripping (3/3 probes intercepted), and pipeline contracts reproducibly without network calls. Live Gemini numbers vary with model version and temperature.
 
 ---
 
@@ -122,7 +135,7 @@ At Gemini Flash-class pricing (**\$0.15 / 1M input tokens**, **\$0.60 / 1M outpu
 
 | Approach | Avg Input / PR | Avg Output / PR | Cost / PR | Cost / 1,000 PRs |
 | :--- | ---: | ---: | ---: | ---: |
-| **ArchRadar (Bounded Subgraph + Diff)** — *Measured Benchmark Avg* | 1,283 tok | 216 tok | **\$0.000322** | **\$0.32** |
+| **ArchRadar (Bounded Subgraph + Diff)** — *Measured Benchmark Avg* | 1,275 tok | 216 tok | **\$0.000321** | **\$0.32** |
 | **ArchRadar (Larger PR Budget)** — *PRD Upper Estimate* | 4,000 tok | 900 tok | **\$0.001140** | **\$1.14** |
 | **Naive Full-Repo Prompting** — *~150k token codebase context* | 150,000 tok | 1,000 tok | \$0.023100 | \$23.10 |
 
@@ -220,17 +233,18 @@ docker compose --profile full up --build
 ## Verification Commands
 
 ```bash
-# 30-Case Evaluation Benchmark
+# 35-Case Evaluation Benchmark
 uv run --project apps/api python -m evals.run_benchmark --output evals/results/latest_report.md
 
 # Backend Lint, Typecheck & Tests
 cd apps/api
-uv run ruff check . ../../evals
+uv run ruff check . ../../evals/run_benchmark.py ../../evals/__init__.py
 uv run mypy app
 uv run pytest -v
 
-# Frontend Lint, Typecheck & Production Build
+# Frontend Unit Tests, Lint, Typecheck & Production Build
 cd apps/web
+npm test
 npm run lint
 npx tsc --noEmit
 npm run build

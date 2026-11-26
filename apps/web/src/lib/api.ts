@@ -3,7 +3,9 @@ import { type z } from "zod";
 import {
   PRAnalysisListSchema,
   PRAnalysisResponseSchema,
+  PRCommentResponseSchema,
   type PRAnalysisResponse,
+  type PRCommentResponse,
 } from "@/lib/schemas/analysis";
 import { HealthResponseSchema, type HealthResponse } from "@/lib/schemas/health";
 import {
@@ -181,6 +183,17 @@ export async function fetchRepositoryAnalyses(
   return requestJson(
     `/api/repos/${encodeURIComponent(repoId)}/analyses`,
     PRAnalysisListSchema,
+    { isServer: options?.isServer }
+  );
+}
+
+export async function fetchAnalysisPrComment(
+  analysisId: string,
+  options?: { isServer?: boolean }
+): Promise<ApiResult<PRCommentResponse>> {
+  return requestJson(
+    `/api/analyses/${encodeURIComponent(analysisId)}/pr-comment`,
+    PRCommentResponseSchema,
     { isServer: options?.isServer }
   );
 }

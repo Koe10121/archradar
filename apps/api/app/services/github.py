@@ -18,7 +18,9 @@ _GITHUB_PR_RE = re.compile(
 _SYMBOL_DEF_RE = re.compile(
     r"(?:def|async\s+def|class|"
     r"export\s+(?:async\s+)?(?:function|const|class|interface|type|enum)|"
-    r"func(?:\s*\([^)]*\))?|type)"
+    r"func(?:\s*\([^)]*\))?|type|"
+    r"pub\s+(?:async\s+)?(?:fn|struct|enum|trait|type)|"
+    r"public\s+(?:class|interface|enum|record))"
     r"\s+([A-Za-z_][A-Za-z0-9_]*)"
 )
 _SIGNATURE_PREFIXES = (
@@ -34,6 +36,16 @@ _SIGNATURE_PREFIXES = (
     "class ",
     "func ",
     "type ",
+    "pub fn ",
+    "pub async fn ",
+    "pub struct ",
+    "pub enum ",
+    "pub trait ",
+    "pub type ",
+    "public class ",
+    "public interface ",
+    "public enum ",
+    "public record ",
 )
 _DIFF_PRIORITY_BOUNDARY_KEYWORDS = SENSITIVE_BOUNDARY_KEYWORDS | frozenset(
     {"crypto", "token", "secret", "session", "oauth", "jwt"}

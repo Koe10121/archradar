@@ -1,0 +1,20 @@
+{
+  "id": "case_034_go_doc_drift_webhook_env",
+  "category": "doc_drift",
+  "title": "Rename WEBHOOK_SIGNING_SECRET to BILLING_WEBHOOK_KEY in Go handler",
+  "description": "Renames environment variable in internal/webhooks/handler.go while README.md still documents WEBHOOK_SIGNING_SECRET.",
+  "repo_fixture": "fixtures/mini_go_service",
+  "doc_files": ["README.md", "docs/ARCHITECTURE.md"],
+  "diff": "diff --git a/internal/webhooks/handler.go b/internal/webhooks/handler.go\nindex 1111111..2222222 100644\n--- a/internal/webhooks/handler.go\n+++ b/internal/webhooks/handler.go\n@@ -7,7 +7,7 @@ import (\n )\n \n func HandleBillingWebhook(payload string, sig string) error {\n-\tsecret := os.Getenv(\"WEBHOOK_SIGNING_SECRET\")\n+\tsecret := os.Getenv(\"BILLING_WEBHOOK_KEY\")\n \tif secret == \"\" || sig == \"\" || payload == \"\" {\n \t\treturn errors.New(\"invalid webhook signature\")\n \t}\n",
+  "expected": {
+    "min_risk": "medium",
+    "max_risk": "critical",
+    "breaking_change_detected": true,
+    "must_include_affected_files": [
+      "internal/webhooks/handler.go",
+      "cmd/server/main.go"
+    ],
+    "doc_drift_expected": true
+  },
+  "adversarial_phantom_probe": []
+}
