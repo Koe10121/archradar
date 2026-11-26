@@ -43,12 +43,12 @@ Work through these phases sequentially. Check off items only after running verif
 - [x] Run benchmark, record precision/recall/citation-accuracy/latency/cost metrics, and save `evals/results/latest_report.md`.
 
 ## Phase 5: Portfolio Polish & Deployment
-- [ ] Deploy frontend (Vercel) + backend & Postgres (Render / Railway / Fly.io) *(deployment configs ready: `render.yaml`, `apps/api/fly.toml`, `apps/web/vercel.json`; live cloud deploy requires user cloud account credentials)*.
+- [x] Deploy frontend to **Vercel Production** (`https://archradar.vercel.app`) + GitHub Actions CI (`.github/workflows/ci.yml` on `Koe10121/archradar`); backend + Postgres deployment blueprints ready (`render.yaml`, `apps/api/fly.toml`) for optional live indexing beyond standalone Demo Mode.
 - [x] Write a standout root `README.md` featuring:
-  - 60-second demo GIF/video right at the top
-  - Live demo URL
-  - System architecture diagram
-  - Real evaluation metrics & failure analysis log
+  - Live production screenshot & 60-second interactive tour right at the top
+  - Live demo URL (`https://archradar.vercel.app`) & CI status badge
+  - System architecture diagram & 5-language support matrix
+  - Real evaluation metrics (35/35) & failure analysis log
   - Cost-per-1,000-PRs breakdown
 
 ## Phase 6: V1.1 Accuracy Fix & V2 Local-First Capabilities

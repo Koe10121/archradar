@@ -3,26 +3,28 @@
 **Deterministic Tree-sitter AST dependency graphs meet grounded AI risk analysis for Pull Requests.**  
 Instead of asking an LLM to guess how files connect, ArchRadar parses TypeScript/JavaScript, Python, Go, Rust, and Java repositories into a relational dependency graph, computes the exact multi-hop reverse-BFS blast radius, tracks historical snapshot architecture drift, renders ready-to-post GitHub PR Comment Markdown with Mermaid subgraphs, and constrains Gemini structured outputs to verified graph citations.
 
+[![Live Demo](https://img.shields.io/badge/Live_Demo-archradar.vercel.app-10B981?logo=vercel&logoColor=white)](https://archradar.vercel.app)
+[![CI](https://github.com/Koe10121/archradar/actions/workflows/ci.yml/badge.svg)](https://github.com/Koe10121/archradar/actions/workflows/ci.yml)
 ![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?logo=fastapi&logoColor=white)
 ![Next.js 15](https://img.shields.io/badge/Next.js-15-000000?logo=nextdotjs&logoColor=white)
 ![Tree-sitter](https://img.shields.io/badge/Tree--sitter-AST-2E8B57)
-![License](https://img.shields.io/badge/Evaluated-35%20Golden%20PRs-F59E0B)
+![Evaluated](https://img.shields.io/badge/Evaluated-35%20Golden%20PRs-F59E0B)
 
 ---
 
-## 60-Second Demo Preview
+## Live Interactive Demo
 
-> **Zero-Friction Portfolio Demo Mode:** Launch the web UI (`npm run dev`) with or without a live database. Two pre-indexed repositories (`acme/saas-billing-platform` in TypeScript and `acme/order-fulfillment-api` in Python) and three pre-computed PR blast-radius scenarios load immediately—no GitHub OAuth required.
+> **Try it instantly (zero login):** **[https://archradar.vercel.app](https://archradar.vercel.app)**  
+> Two pre-indexed repositories (`acme/saas-billing-platform` in TypeScript and `acme/order-fulfillment-api` in Python), `v1 -> v2` snapshot drift history, and three pre-computed PR blast-radius scenarios load immediately in the browser.
 
-<!-- Replace with a recorded GIF or live deployment URL once hosted -->
-```text
-[ Demo Recording Placeholder — Record 60s walkthrough of: ]
-1. Click "#42 Auth"  -> Critical blast radius lights up 9/12 files across 3 hops (score 90/100)
-2. Click "#51 Webhook" -> High-risk Python HMAC return-type bug bypassing shipping webhook checks
-3. Click "#47 Refactor" -> Safe internal formatter refactor (score 17/100, breaking_change=false)
-4. Click any Impacted Flow -> Graph pans & zooms to affected nodes; copy Doc-Drift Markdown patch
-```
+[![ArchRadar Live Demo — PR #42 Blast-Radius Heatmap](docs/assets/archradar-live-demo.png)](https://archradar.vercel.app)
+
+**Quick 60-Second Tour on [archradar.vercel.app](https://archradar.vercel.app):**
+1. **PR Blast-Radius Heatmap (`#42 Auth` / `#51 Webhook` / `#47 Refactor`):** Watch direct (amber), 1-hop (red), and 2–3 hop (rose) dependents light up on the React Flow canvas; click any **Impacted Flow** to pan/zoom to its verified files.
+2. **PR Comment Preview:** Click **PR Comment Preview** in the Blast Radius drawer to inspect and copy the deterministic GitHub PR Markdown comment (complete with a `flowchart LR` Mermaid mini-subgraph and doc-drift diff patch).
+3. **Historical Drift Timeline:** Click **Drift Timeline** to scrub `v1 -> v2` commit snapshots and highlight newly added modules, removed edges, and `in_degree` coupling shifts.
+4. **Cost & Citation Telemetry:** Click **Telemetry** to inspect latency percentiles (`P50`/`P95`), token spend (`$0.32`–`$0.77` / 1k PRs), and zero-phantom Citation Verification Gate metrics.
 
 ### Pre-Seeded Demo Scenarios
 
