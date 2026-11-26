@@ -29,13 +29,13 @@ Work through these phases sequentially. Check off items only after running verif
 - [x] Write unit + mocked integration tests for blast-radius BFS and citation validation.
 
 ## Phase 3: Interactive Living Architecture UI (Next.js + React Flow)
-- [ ] Build Graph Canvas component using `@xyflow/react` + Dagre/ELK automatic layout.
-- [ ] Create custom File Node component showing language badge, folder color coding, LOC, and centrality badge.
-- [ ] Implement Node Inspector side drawer (exported symbols, upstream/downstream clickable links).
-- [ ] Implement **PR Blast-Radius Overlay Mode**:
+- [x] Build Graph Canvas component using `@xyflow/react` + Dagre/ELK automatic layout.
+- [x] Create custom File Node component showing language badge, folder color coding, LOC, and centrality badge.
+- [x] Implement Node Inspector side drawer (exported symbols, upstream/downstream clickable links).
+- [x] Implement **PR Blast-Radius Overlay Mode**:
   - Highlight modified (amber), 1-hop (red), 2-hop (soft red), and dim unaffected nodes.
   - Display AI Risk Report panel (severity badge, impacted flows that pan/focus the graph when clicked, doc-drift Markdown patch with copy button, reviewer checklist).
-- [ ] Build "Analyze a PR" modal (supports GitHub PR URL or pasting a sample diff) + "Index New Repo" flow with live progress status.
+- [x] Build "Analyze a PR" modal (supports GitHub PR URL or pasting a sample diff) + "Index New Repo" flow with live progress status.
 
 ## Phase 4: Evaluation Suite & Zero-Friction Demo Mode
 - [ ] Seed 2 rich pre-indexed demo repositories + 3 realistic pre-computed PR scenarios (e.g., Safe Refactor, Subtle Webhook Breakage, High-Risk Auth Middleware Change).

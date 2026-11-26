@@ -27,3 +27,26 @@ body {
   background-color: hsl(var(--background));
   color: hsl(var(--foreground));
 }
+
+.react-flow__controls {
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 0.5rem;
+  overflow: hidden;
+}
+
+.react-flow__controls-button {
+  background: #0f172a;
+  border-bottom: 1px solid #1e293b;
+  fill: #e2e8f0;
+}
+
+.react-flow__controls-button:hover {
+  background: #1e293b;
+}
+
+.react-flow__minimap {
+  background: #020617;
+  border: 1px solid #1e293b;
+  border-radius: 0.5rem;
+}
