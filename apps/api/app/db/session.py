@@ -14,7 +14,6 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy.pool import NullPool
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +66,10 @@ def create_db_engine(database_url: str) -> AsyncEngine:
         return create_async_engine(
             clean_url,
             echo=False,
-            poolclass=NullPool,
+            pool_size=2,
+            max_overflow=3,
+            pool_pre_ping=True,
+            pool_recycle=300,
             connect_args=connect_args,
         )
     return create_async_engine(
@@ -92,7 +94,7 @@ async def get_db_session(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
 
 async def check_database_health(
     engine: AsyncEngine,
-    timeout_seconds: float = 2.0,
+    timeout_seconds: float = 8.0,
 ) -> tuple[bool, str | None]:
     """Run a lightweight connectivity check against the configured database."""
 
