@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 
 import { AnalyzePRModal } from "@/components/analyze-pr-modal";
+import { ArchHealthPanel } from "@/components/arch-health-panel";
 import { BlastRadiusPanel } from "@/components/blast-radius-panel";
 import { DriftTimelinePanel } from "@/components/drift-timeline-panel";
 import { GeminiKeyModal } from "@/components/gemini-key-modal";
@@ -33,6 +34,7 @@ import {
   fetchSnapshotDiff,
   type HealthCheckResult,
 } from "@/lib/api";
+import { computeClientArchHealth, findShortestCausalChain } from "@/lib/arch-health";
 import {
   computeDemoSnapshotDiff,
   DEMO_BILLING_GRAPH,
@@ -108,13 +110,20 @@ export function ArchRadarWorkspace({
   const [driftLoading, setDriftLoading] = useState<boolean>(false);
   const [driftError, setDriftError] = useState<string | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [repoAnalyses, setRepoAnalyses] = useState<PRAnalysisResponse[]>(
+    initialGraph
+      ? initialAnalyses
+      : DEMO_PR_SCENARIOS.filter((s) => s.repository_id === DEMO_BILLING_REPO_ID)
+  );
   const [activeAnalysis, setActiveAnalysis] = useState<PRAnalysisResponse | null>(
     initialGraph ? (initialAnalyses[0] ?? null) : (DEMO_PR_SCENARIOS[0] ?? null)
   );
   const [blastOverlayActive, setBlastOverlayActive] = useState<boolean>(
     initialGraph ? initialAnalyses.length > 0 : true
   );
-  const [activeTab, setActiveTab] = useState<"blast" | "drift" | "inspector">("blast");
+  const [isolateSubgraph, setIsolateSubgraph] = useState<boolean>(false);
+  const [activeCyclePaths, setActiveCyclePaths] = useState<string[]>([]);
+  const [activeTab, setActiveTab] = useState<"blast" | "health" | "drift" | "inspector">("blast");
   const [searchQuery, setSearchQuery] = useState("");
   const [focusedPaths, setFocusedPaths] = useState<string[]>([]);
   const [focusTrigger, setFocusTrigger] = useState(0);
@@ -166,6 +175,38 @@ export function ArchRadarWorkspace({
     () => graph.nodes.find((n) => n.id === selectedNodeId) ?? null,
     [graph.nodes, selectedNodeId]
   );
+
+  const effectiveHealth = useMemo(
+    () => graph.arch_health ?? computeClientArchHealth(graph),
+    [graph]
+  );
+
+  const healthSmellCount =
+    effectiveHealth.cycle_count + effectiveHealth.layer_violation_count;
+
+  const causalChainEdgeKeys = useMemo(() => {
+    const keys = new Set<string>();
+    if (!selectedNode || !blastOverlayActive || !activeAnalysis) return keys;
+    const hops = findShortestCausalChain(
+      selectedNode.path,
+      activeAnalysis.blast_radius,
+      graph.edges
+    );
+    for (const hop of hops) {
+      keys.add(`${hop.sourcePath}=>${hop.targetPath}`);
+    }
+    return keys;
+  }, [selectedNode, blastOverlayActive, activeAnalysis, graph.edges]);
+
+  const cycleEdgeKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (let i = 0; i + 1 < activeCyclePaths.length; i += 1) {
+      const from = activeCyclePaths[i];
+      const to = activeCyclePaths[i + 1];
+      if (from && to) keys.add(`${from}=>${to}`);
+    }
+    return keys;
+  }, [activeCyclePaths]);
 
   const searchMatchesCount = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -238,19 +279,22 @@ export function ArchRadarWorkspace({
   async function handleSelectRepo(nextRepoId: string): Promise<void> {
     setStatusError(null);
     setSelectedNodeId(null);
+    setIsolateSubgraph(false);
+    setActiveCyclePaths([]);
 
     if (!backendRepoIds.has(nextRepoId)) {
       const offlineGraph = DEMO_GRAPHS_BY_REPO_ID[nextRepoId] ?? DEMO_BILLING_GRAPH;
       const offlineSnaps = DEMO_SNAPSHOTS_BY_REPO_ID[nextRepoId] ?? [];
-      const defaultScenario =
-        DEMO_PR_SCENARIOS.find((s) => s.repository_id === nextRepoId) ?? null;
+      const offlineList = DEMO_PR_SCENARIOS.filter((s) => s.repository_id === nextRepoId);
+      const defaultScenario = offlineList[0] ?? null;
       setActiveRepoId(nextRepoId);
       setGraph(offlineGraph);
+      setRepoAnalyses(offlineList);
       setActiveAnalysis(defaultScenario);
       setBlastOverlayActive(defaultScenario !== null);
       setDriftOverlayActive(false);
       applySnapshotState(nextRepoId, offlineSnaps, offlineGraph.snapshot_id);
-      setActiveTab("blast");
+      setActiveTab(defaultScenario ? "blast" : "health");
       return;
     }
 
@@ -263,19 +307,22 @@ export function ArchRadarWorkspace({
       setStatusError(`Failed to load repository graph: ${graphRes.error}`);
       return;
     }
-    const latestAnalysis =
-      analysesRes.ok && analysesRes.data.length > 0 ? (analysesRes.data[0] ?? null) : null;
+    const fetchedAnalyses = analysesRes.ok ? analysesRes.data : [];
+    const latestAnalysis = fetchedAnalyses[0] ?? null;
     const nextSnaps = snapsRes.ok ? snapsRes.data : [];
     setActiveRepoId(nextRepoId);
     setGraph(graphRes.data);
+    setRepoAnalyses(fetchedAnalyses);
     setActiveAnalysis(latestAnalysis);
     setBlastOverlayActive(latestAnalysis !== null);
     setDriftOverlayActive(false);
     applySnapshotState(nextRepoId, nextSnaps, graphRes.data.snapshot_id);
-    setActiveTab("blast");
+    setActiveTab(latestAnalysis ? "blast" : "health");
   }
 
   async function handleRepoIndexed(repositoryId: string): Promise<void> {
+    setIsolateSubgraph(false);
+    setActiveCyclePaths([]);
     const [reposRes, graphRes, analysesRes, snapsRes] = await Promise.all([
       fetchRepositories(),
       fetchRepositoryGraph(repositoryId),
@@ -286,11 +333,12 @@ export function ArchRadarWorkspace({
       setLiveRepos(reposRes.data);
     }
     if (graphRes.ok) {
-      const latestAnalysis =
-        analysesRes.ok && analysesRes.data.length > 0 ? (analysesRes.data[0] ?? null) : null;
+      const fetchedAnalyses = analysesRes.ok ? analysesRes.data : [];
+      const latestAnalysis = fetchedAnalyses[0] ?? null;
       const nextSnaps = snapsRes.ok ? snapsRes.data : [];
       setActiveRepoId(repositoryId);
       setGraph(graphRes.data);
+      setRepoAnalyses(fetchedAnalyses);
       setActiveAnalysis(latestAnalysis);
       setBlastOverlayActive(latestAnalysis !== null);
       setDriftOverlayActive(false);
@@ -302,6 +350,7 @@ export function ArchRadarWorkspace({
       setToSnapshotId(latest?.id ?? "");
       setSnapshotDiff(null);
       setSelectedNodeId(null);
+      setActiveTab(latestAnalysis ? "blast" : "health");
     } else {
       setStatusError(graphRes.error);
     }
@@ -310,6 +359,7 @@ export function ArchRadarWorkspace({
   async function handleOpenDriftTab(): Promise<void> {
     setActiveTab("drift");
     setBlastOverlayActive(false);
+    setActiveCyclePaths([]);
     if (snapshots.length >= 2) {
       setDriftOverlayActive(true);
       if (!snapshotDiff && fromSnapshotId && toSnapshotId) {
@@ -372,9 +422,28 @@ export function ArchRadarWorkspace({
     }
   }
 
+  function handleInspectPath(path: string): void {
+    const target = graph.nodes.find((n) => n.path === path);
+    if (target) {
+      handleNavigateToNode(target.id);
+    }
+  }
+
   function handleFocusPaths(paths: string[]): void {
     if (paths.length === 0) return;
+    setActiveCyclePaths([]);
     setFocusedPaths(paths);
+    setFocusTrigger((n) => n + 1);
+  }
+
+  function handleFocusCycle(cyclePaths: string[]): void {
+    if (cyclePaths.length === 0) return;
+    setBlastOverlayActive(false);
+    setDriftOverlayActive(false);
+    setActiveCyclePaths(cyclePaths);
+    const unique = [...new Set(cyclePaths)];
+    setFocusedPaths(unique);
+    setIsolateSubgraph(true);
     setFocusTrigger((n) => n + 1);
   }
 
@@ -383,6 +452,7 @@ export function ArchRadarWorkspace({
     if (!scenario) return;
     setStatusError(null);
     setSelectedNodeId(null);
+    setActiveCyclePaths([]);
 
     const demoRepoMeta = DEMO_REPOSITORIES.find((r) => r.id === scenario.repository_id);
     const matchedLiveRepo = demoRepoMeta
@@ -398,13 +468,13 @@ export function ArchRadarWorkspace({
         fetchRepositorySnapshots(matchedLiveRepo.id),
       ]);
       if (graphRes.ok) {
-        const matchedAnalysis = analysesRes.ok
-          ? analysesRes.data.find((a) => a.pr_number === scenario.pr_number)
-          : undefined;
+        const fetchedList = analysesRes.ok ? analysesRes.data : [];
+        const matchedAnalysis = fetchedList.find((a) => a.pr_number === scenario.pr_number);
         const resolvedAnalysis = matchedAnalysis ?? scenario;
         const nextSnaps = snapsRes.ok ? snapsRes.data : [];
         setActiveRepoId(matchedLiveRepo.id);
         setGraph(graphRes.data);
+        setRepoAnalyses(fetchedList.length > 0 ? fetchedList : [resolvedAnalysis]);
         setActiveAnalysis(resolvedAnalysis);
         setBlastOverlayActive(true);
         setDriftOverlayActive(false);
@@ -421,8 +491,12 @@ export function ArchRadarWorkspace({
     const offlineGraph =
       DEMO_GRAPHS_BY_REPO_ID[scenario.repository_id] ?? DEMO_BILLING_GRAPH;
     const offlineSnaps = DEMO_SNAPSHOTS_BY_REPO_ID[scenario.repository_id] ?? [];
+    const offlineList = DEMO_PR_SCENARIOS.filter(
+      (s) => s.repository_id === scenario.repository_id
+    );
     setActiveRepoId(scenario.repository_id);
     setGraph(offlineGraph);
+    setRepoAnalyses(offlineList);
     setActiveAnalysis(scenario);
     setBlastOverlayActive(true);
     setDriftOverlayActive(false);
@@ -448,7 +522,8 @@ export function ArchRadarWorkspace({
                 {activeRepo.is_demo && <Badge>Demo Mode</Badge>}
               </div>
               <p className="text-[11px] text-muted-foreground">
-                {graph.file_count} files · {graph.edge_count} edges
+                {graph.file_count} files · {graph.edge_count} edges · Health{" "}
+                {effectiveHealth.health_score}/100
               </p>
             </div>
           </div>
@@ -573,7 +648,7 @@ export function ArchRadarWorkspace({
               >
                 Index any public GitHub repo
               </button>{" "}
-              <span className="text-muted-foreground">(TS/JS, Py, Go, Rust, Java)</span>
+              <span className="text-muted-foreground">(monorepo + 5 languages + docs)</span>
             </span>
             <span className="flex items-center gap-1.5">
               <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-red-500/20 font-mono text-[10px] font-bold text-red-300">
@@ -596,7 +671,7 @@ export function ArchRadarWorkspace({
               >
                 Analyze PR
               </button>{" "}
-              <span className="text-muted-foreground">(auto-loads sample diff)</span>
+              <span className="text-muted-foreground">(1-click GitHub PRs or sample diff)</span>
             </span>
             <span className="flex items-center gap-1.5">
               <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500/20 font-mono text-[10px] font-bold text-emerald-300">
@@ -629,7 +704,7 @@ export function ArchRadarWorkspace({
         </div>
       )}
 
-      <div className="grid flex-1 grid-cols-1 gap-4 p-4 lg:grid-cols-[1fr_410px]">
+      <div className="grid flex-1 grid-cols-1 gap-4 p-4 lg:grid-cols-[1fr_420px]">
         <div className="min-h-[540px] lg:h-[calc(100vh-6.25rem)]">
           <ArchitectureCanvas
             graph={graph}
@@ -637,6 +712,10 @@ export function ArchRadarWorkspace({
             onSelectNode={handleSelectNode}
             blastRadius={activeAnalysis?.blast_radius ?? null}
             blastOverlayActive={blastOverlayActive}
+            isolateSubgraph={isolateSubgraph}
+            onToggleIsolateSubgraph={() => setIsolateSubgraph((prev) => !prev)}
+            causalChainEdgeKeys={causalChainEdgeKeys}
+            cycleEdgeKeys={cycleEdgeKeys}
             snapshotDiff={snapshotDiff}
             driftOverlayActive={driftOverlayActive}
             searchQuery={searchQuery}
@@ -647,11 +726,12 @@ export function ArchRadarWorkspace({
 
         <aside className="flex flex-col overflow-hidden rounded-xl border border-border bg-card lg:h-[calc(100vh-6.25rem)]">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2">
-            <div className="flex gap-1">
+            <div className="flex flex-wrap gap-1">
               <button
                 type="button"
                 onClick={() => {
                   setActiveTab("blast");
+                  setActiveCyclePaths([]);
                   if (activeAnalysis) {
                     setDriftOverlayActive(false);
                   }
@@ -662,7 +742,23 @@ export function ArchRadarWorkspace({
                     : "text-muted-foreground hover:bg-secondary"
                 }`}
               >
-                Blast Radius
+                Blast
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab("health")}
+                className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition ${
+                  activeTab === "health"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:bg-secondary"
+                }`}
+              >
+                Health
+                {healthSmellCount > 0 && (
+                  <span className="rounded-full bg-violet-500/30 px-1.5 py-0.2 font-mono text-[10px] text-violet-200">
+                    {healthSmellCount}
+                  </span>
+                )}
               </button>
               <button
                 type="button"
@@ -707,20 +803,46 @@ export function ArchRadarWorkspace({
             {activeTab === "blast" ? (
               <BlastRadiusPanel
                 analysis={activeAnalysis}
+                analysesHistory={repoAnalyses}
+                onSelectAnalysis={(picked) => {
+                  setActiveAnalysis(picked);
+                  setBlastOverlayActive(true);
+                  setDriftOverlayActive(false);
+                  setActiveCyclePaths([]);
+                  handleFocusPaths([
+                    ...picked.blast_radius.direct,
+                    ...picked.blast_radius.hop_1,
+                  ]);
+                }}
                 overlayActive={blastOverlayActive}
+                isolateSubgraph={isolateSubgraph}
+                onToggleIsolateSubgraph={() => setIsolateSubgraph((prev) => !prev)}
                 isOfflineDemo={isOfflineDemo}
                 onToggleOverlay={() => {
                   setBlastOverlayActive((prev) => {
                     const next = !prev;
-                    if (next) setDriftOverlayActive(false);
+                    if (next) {
+                      setDriftOverlayActive(false);
+                      setActiveCyclePaths([]);
+                    } else {
+                      setIsolateSubgraph(false);
+                    }
                     return next;
                   });
                 }}
                 onClearAnalysis={() => {
                   setActiveAnalysis(null);
                   setBlastOverlayActive(false);
+                  setIsolateSubgraph(false);
                 }}
                 onFocusPaths={handleFocusPaths}
+              />
+            ) : activeTab === "health" ? (
+              <ArchHealthPanel
+                health={effectiveHealth}
+                onFocusCycle={handleFocusCycle}
+                onFocusPaths={handleFocusPaths}
+                onInspectPath={handleInspectPath}
               />
             ) : activeTab === "drift" ? (
               <DriftTimelinePanel
@@ -767,15 +889,21 @@ export function ArchRadarWorkspace({
         repoId={activeRepoId}
         repoLabel={`${activeRepo.owner}/${activeRepo.name}`}
         isOfflineDemo={isOfflineDemo}
+        isDemoRepo={activeRepo.is_demo}
         demoScenarios={matchingDemoScenarios}
         graph={graph}
         geminiApiKey={geminiApiKey}
         onOpenGeminiKeyModal={() => setKeyModalOpen(true)}
         onClose={() => setAnalyzeOpen(false)}
         onAnalyzed={(analysis) => {
+          setRepoAnalyses((prev) => [
+            analysis,
+            ...prev.filter((item) => item.id !== analysis.id),
+          ]);
           setActiveAnalysis(analysis);
           setBlastOverlayActive(true);
           setDriftOverlayActive(false);
+          setActiveCyclePaths([]);
           setActiveTab("blast");
           handleFocusPaths([
             ...analysis.blast_radius.direct,

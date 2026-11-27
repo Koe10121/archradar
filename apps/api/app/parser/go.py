@@ -53,9 +53,7 @@ def _is_exported_go_ident(name: str | None) -> bool:
     return name is not None and len(name) > 0 and name[0].isupper()
 
 
-def load_go_module_path(repo_root: Path) -> str:
-    """Parse module path from go.mod if present, returning empty string if missing."""
-    go_mod = repo_root / "go.mod"
+def _parse_go_mod_file(go_mod: Path) -> str:
     if not go_mod.is_file():
         return ""
     try:
@@ -73,6 +71,33 @@ def load_go_module_path(repo_root: Path) -> str:
             if len(parts) == 2:
                 return _strip_go_string(parts[1]).strip("/")
     return ""
+
+
+def load_go_module_path(repo_root: Path) -> str:
+    """Parse module path from root go.mod if present, returning empty string if missing."""
+    return _parse_go_mod_file(repo_root / "go.mod")
+
+
+def load_go_mod_hierarchy(
+    repo_root: Path,
+    ignored_dirs: frozenset[str] = frozenset(),
+) -> dict[str, AliasConfig]:
+    """Discover root and nested go.mod files keyed by repo-relative directory."""
+    resolved_root = repo_root.resolve()
+    configs: dict[str, AliasConfig] = {}
+    for path in sorted(resolved_root.rglob("go.mod")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        rel = path.relative_to(resolved_root)
+        if any(part in ignored_dirs for part in rel.parts[:-1]):
+            continue
+        mod_path = _parse_go_mod_file(path)
+        if not mod_path:
+            continue
+        rel_dir = rel.parent.as_posix()
+        key_dir = "" if rel_dir == "." else rel_dir
+        configs[key_dir] = AliasConfig(go_module_path=mod_path, config_dir=key_dir)
+    return configs
 
 
 class GoAdapter(LanguageAdapter):
@@ -191,6 +216,8 @@ class GoAdapter(LanguageAdapter):
                     name=name,
                     kind="function",
                     signature=_clean_signature(node),
+                    start_line=node.start_point[0] + 1,
+                    end_line=node.end_point[0] + 1,
                 )
             )
 
@@ -209,6 +236,8 @@ class GoAdapter(LanguageAdapter):
                     name=name,
                     kind="method",
                     signature=_clean_signature(node),
+                    start_line=node.start_point[0] + 1,
+                    end_line=node.end_point[0] + 1,
                 )
             )
 
@@ -240,6 +269,8 @@ class GoAdapter(LanguageAdapter):
                     name=name,
                     kind=kind,
                     signature=_clean_signature(child, prefix="type "),
+                    start_line=child.start_point[0] + 1,
+                    end_line=child.end_point[0] + 1,
                 )
             )
 
@@ -263,11 +294,17 @@ class GoAdapter(LanguageAdapter):
             pkg_dir = "" if joined == "." else joined
         else:
             go_module = (alias_config.go_module_path if alias_config else "").strip("/")
+            cfg_dir = (alias_config.config_dir if alias_config else "").strip("/")
             if go_module:
                 if specifier == go_module:
-                    pkg_dir = ""
+                    pkg_dir = cfg_dir
                 elif specifier.startswith(f"{go_module}/"):
-                    pkg_dir = specifier[len(go_module) + 1 :]
+                    rel_pkg = specifier[len(go_module) + 1 :]
+                    pkg_dir = (
+                        posixpath.normpath(posixpath.join(cfg_dir, rel_pkg))
+                        if cfg_dir
+                        else rel_pkg
+                    )
                 else:
                     return []
             else:

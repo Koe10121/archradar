@@ -162,6 +162,22 @@ def render_pr_comment(analysis: PRAnalysisResponse) -> str:
         boundaries = ", ".join(f"`{b}`" for b in br.sensitive_boundaries_touched)
         lines.extend([f"**Sensitive Boundaries Touched:** {boundaries}", ""])
 
+    if br.impacted_test_files or br.uncovered_files or br.suggested_test_command:
+        lines.extend(["### Test Suite & Coverage Intelligence", ""])
+        if br.impacted_test_files:
+            lines.append(
+                f"- **Impacted Tests ({len(br.impacted_test_files)}):** "
+                f"{_format_file_list(br.impacted_test_files)}"
+            )
+        if br.suggested_test_command:
+            lines.append(f"- **Run Targeted Tests:** `{br.suggested_test_command}`")
+        if br.uncovered_files:
+            lines.append(
+                f"- **Coverage Blind Spots ({len(br.uncovered_files)} untested prod files):** "
+                f"{_format_file_list(br.uncovered_files)}"
+            )
+        lines.append("")
+
     lines.extend(_render_mermaid_subgraph(br))
 
     if report is not None and report.impacted_flows:

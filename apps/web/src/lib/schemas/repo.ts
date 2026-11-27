@@ -4,6 +4,8 @@ export const ExportedSymbolSchema = z.object({
   name: z.string(),
   kind: z.string(),
   signature: z.string(),
+  start_line: z.number().int().nullable().optional(),
+  end_line: z.number().int().nullable().optional(),
 });
 
 export const GraphNodeSchema = z.object({
@@ -15,6 +17,7 @@ export const GraphNodeSchema = z.object({
   exports: z.array(ExportedSymbolSchema),
   in_degree: z.number().int(),
   out_degree: z.number().int(),
+  is_test: z.boolean().optional(),
 });
 
 export const GraphEdgeSchema = z.object({
@@ -27,6 +30,44 @@ export const GraphEdgeSchema = z.object({
   imported_symbols: z.array(z.string()),
 });
 
+export const CycleFindingSchema = z.object({
+  cycle_paths: z.array(z.string()),
+  length: z.number().int(),
+  severity: z.enum(["warning", "high"]),
+});
+
+export const HotspotFindingSchema = z.object({
+  path: z.string(),
+  module_group: z.string(),
+  in_degree: z.number().int(),
+  out_degree: z.number().int(),
+  loc: z.number().int(),
+  has_tests: z.boolean(),
+  touches_sensitive_boundary: z.boolean(),
+  reason: z.string(),
+});
+
+export const LayerViolationSchema = z.object({
+  source_path: z.string(),
+  target_path: z.string(),
+  source_layer: z.string(),
+  target_layer: z.string(),
+  imported_symbols: z.array(z.string()).default([]),
+  reason: z.string(),
+});
+
+export const ArchitectureHealthSchema = z.object({
+  health_score: z.number().int().min(0).max(100),
+  grade: z.enum(["healthy", "watch", "at_risk"]),
+  cycle_count: z.number().int(),
+  layer_violation_count: z.number().int(),
+  hotspot_count: z.number().int(),
+  untested_hub_count: z.number().int(),
+  cycles: z.array(CycleFindingSchema).default([]),
+  hotspots: z.array(HotspotFindingSchema).default([]),
+  layer_violations: z.array(LayerViolationSchema).default([]),
+});
+
 export const GraphResponseSchema = z.object({
   repository_id: z.string(),
   snapshot_id: z.string(),
@@ -35,7 +76,20 @@ export const GraphResponseSchema = z.object({
   edge_count: z.number().int(),
   nodes: z.array(GraphNodeSchema),
   edges: z.array(GraphEdgeSchema),
+  arch_health: ArchitectureHealthSchema.nullable().optional(),
 });
+
+export const GitHubPRSummarySchema = z.object({
+  number: z.number().int(),
+  title: z.string(),
+  state: z.string(),
+  author: z.string(),
+  html_url: z.string(),
+  updated_at: z.string(),
+  draft: z.boolean().default(false),
+});
+
+export const GitHubPRListSchema = z.array(GitHubPRSummarySchema);
 
 export const RepositorySummarySchema = z.object({
   id: z.string(),
@@ -117,3 +171,8 @@ export type SnapshotSummary = z.infer<typeof SnapshotSummarySchema>;
 export type SnapshotDiffEdge = z.infer<typeof SnapshotDiffEdgeSchema>;
 export type CentralityDelta = z.infer<typeof CentralityDeltaSchema>;
 export type SnapshotDiffResponse = z.infer<typeof SnapshotDiffResponseSchema>;
+export type CycleFinding = z.infer<typeof CycleFindingSchema>;
+export type HotspotFinding = z.infer<typeof HotspotFindingSchema>;
+export type LayerViolation = z.infer<typeof LayerViolationSchema>;
+export type ArchitectureHealth = z.infer<typeof ArchitectureHealthSchema>;
+export type GitHubPRSummary = z.infer<typeof GitHubPRSummarySchema>;

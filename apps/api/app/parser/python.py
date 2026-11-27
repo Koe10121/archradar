@@ -71,6 +71,7 @@ class PythonAdapter(LanguageAdapter):
         exports: list[ExportedSymbol],
     ) -> None:
         for child in root.children:
+            span_node = child
             target = child
             if child.type == "decorated_definition":
                 inner = next(
@@ -85,6 +86,9 @@ class PythonAdapter(LanguageAdapter):
                     continue
                 target = inner
 
+            start_line = span_node.start_point[0] + 1
+            end_line = span_node.end_point[0] + 1
+
             if target.type == "function_definition":
                 name = self._definition_name(target)
                 if name and not name.startswith("_"):
@@ -93,6 +97,8 @@ class PythonAdapter(LanguageAdapter):
                             name=name,
                             kind="function",
                             signature=_clean_signature(target),
+                            start_line=start_line,
+                            end_line=end_line,
                         )
                     )
             elif target.type == "class_definition":
@@ -103,6 +109,8 @@ class PythonAdapter(LanguageAdapter):
                             name=name,
                             kind="class",
                             signature=_clean_signature(target),
+                            start_line=start_line,
+                            end_line=end_line,
                         )
                     )
 

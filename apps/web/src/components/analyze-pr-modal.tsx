@@ -1,10 +1,19 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { GitPullRequest, KeyRound, Loader2, ShieldCheck, Sparkles, X } from "lucide-react";
+import {
+  GitPullRequest,
+  KeyRound,
+  Loader2,
+  ShieldCheck,
+  Sparkles,
+  X,
+} from "lucide-react";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { analyzePullRequest } from "@/lib/api";
+import { analyzePullRequest, fetchRepositoryGitHubPRs } from "@/lib/api";
+import { isTestFilePath } from "@/lib/arch-health";
 import {
   SAMPLE_DIFFS_BY_REPO_ID,
   SAMPLE_UNIFIED_DIFF,
@@ -12,13 +21,14 @@ import {
 import { maskApiKey } from "@/lib/gemini-key";
 import { buildSampleDiffForGraph } from "@/lib/sample-diff";
 import { type BlastRadiusResult, type PRAnalysisResponse } from "@/lib/schemas/analysis";
-import { type GraphResponse } from "@/lib/schemas/repo";
+import { type GitHubPRSummary, type GraphResponse } from "@/lib/schemas/repo";
 
 interface AnalyzePRModalProps {
   open: boolean;
   repoId: string;
   repoLabel: string;
   isOfflineDemo: boolean;
+  isDemoRepo?: boolean;
   demoScenarios: PRAnalysisResponse[];
   graph: GraphResponse;
   geminiApiKey: string;
@@ -57,6 +67,7 @@ function computeDemoBlastRadius(
   const hop1: string[] = [];
   const hop2: string[] = [];
   const hop3: string[] = [];
+  const impactedTests: string[] = [];
   const queue: Array<[string, number]> = direct.map((p) => [p, 0]);
 
   while (queue.length > 0) {
@@ -66,6 +77,10 @@ function computeDemoBlastRadius(
     if (depth >= 3) continue;
     for (const dep of reverseAdj.get(current) ?? []) {
       if (seen.has(dep)) continue;
+      if (isTestFilePath(dep)) {
+        if (!impactedTests.includes(dep)) impactedTests.push(dep);
+        continue;
+      }
       seen.add(dep);
       if (depth + 1 === 1) hop1.push(dep);
       else if (depth + 1 === 2) hop2.push(dep);
@@ -101,6 +116,11 @@ function computeDemoBlastRadius(
       sensitive_boundaries_touched: [],
       symbol_matched_files: [],
       impacted_edges: [],
+      co_located_files: [],
+      impacted_test_files: impactedTests,
+      uncovered_files: [],
+      candidate_doc_files: [],
+      suggested_test_command: null,
     },
     ai_report: null,
     citation_telemetry: null,
@@ -118,6 +138,7 @@ export function AnalyzePRModal({
   repoId,
   repoLabel,
   isOfflineDemo,
+  isDemoRepo = false,
   demoScenarios,
   graph,
   geminiApiKey,
@@ -147,6 +168,8 @@ export function AnalyzePRModal({
   const [runAi, setRunAi] = useState(Boolean(geminiApiKey));
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [recentPRs, setRecentPRs] = useState<GitHubPRSummary[]>([]);
+  const [loadingPRs, setLoadingPRs] = useState(false);
 
   useEffect(() => {
     setRawDiff(autoSample.diff);
@@ -158,6 +181,28 @@ export function AnalyzePRModal({
       setRunAi(true);
     }
   }, [open, geminiApiKey]);
+
+  useEffect(() => {
+    if (!open || isOfflineDemo || isDemoRepo) {
+      setRecentPRs([]);
+      setLoadingPRs(false);
+      return;
+    }
+    let cancelled = false;
+    setLoadingPRs(true);
+    void fetchRepositoryGitHubPRs(repoId).then((res) => {
+      if (cancelled) return;
+      setLoadingPRs(false);
+      if (res.ok) {
+        setRecentPRs(res.data);
+      } else {
+        setRecentPRs([]);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, repoId, isOfflineDemo, isDemoRepo]);
 
   useEffect(() => {
     if (!open) return;
@@ -212,7 +257,7 @@ export function AnalyzePRModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm">
-      <div className="w-full max-w-2xl rounded-xl border border-border bg-card shadow-2xl">
+      <div className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-xl border border-border bg-card shadow-2xl">
         <div className="flex items-center justify-between border-b border-border px-5 py-4">
           <div className="flex items-center gap-2">
             <GitPullRequest className="h-5 w-5 text-amber-400" />
@@ -252,6 +297,50 @@ export function AnalyzePRModal({
                   </Button>
                 ))}
               </div>
+            </div>
+          )}
+
+          {!isOfflineDemo && !isDemoRepo && (loadingPRs || recentPRs.length > 0) && (
+            <div className="space-y-2 rounded-lg border border-sky-500/30 bg-sky-500/10 p-3 text-xs">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-semibold text-sky-200">
+                  1-Click Recent GitHub Pull Requests ({repoLabel})
+                </span>
+                {loadingPRs && <Loader2 className="h-3.5 w-3.5 animate-spin text-sky-300" />}
+              </div>
+              {recentPRs.length > 0 && (
+                <div className="flex max-h-28 flex-wrap gap-1.5 overflow-y-auto">
+                  {recentPRs.map((pr) => (
+                    <button
+                      key={pr.number}
+                      type="button"
+                      onClick={() => {
+                        setMode("url");
+                        setPrUrl(pr.html_url);
+                        setPrTitle(`#${pr.number} ${pr.title}`);
+                      }}
+                      className={`inline-flex max-w-full items-center gap-1.5 rounded-md border px-2 py-1 text-left text-[11px] transition ${
+                        mode === "url" && prUrl === pr.html_url
+                          ? "border-sky-400 bg-sky-500/25 text-white"
+                          : "border-border bg-slate-950/80 text-slate-200 hover:border-sky-400/60"
+                      }`}
+                    >
+                      <Badge
+                        variant={
+                          pr.state === "open"
+                            ? "success"
+                            : pr.state === "merged"
+                              ? "secondary"
+                              : "warning"
+                        }
+                      >
+                        #{pr.number} {pr.state}
+                      </Badge>
+                      <span className="truncate">{pr.title}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
@@ -339,7 +428,7 @@ export function AnalyzePRModal({
                     onChange={(e) => setRunAi(e.target.checked)}
                     className="h-4 w-4 rounded border-border bg-slate-950 accent-amber-500"
                   />
-                  Include Grounded Gemini AI Risk &amp; Doc-Drift Report
+                  Include Grounded Gemini AI Risk &amp; Auto Doc-Drift Report
                 </label>
 
                 {geminiApiKey ? (
@@ -367,9 +456,9 @@ export function AnalyzePRModal({
               <p className="text-[11px] text-muted-foreground">
                 {runAi
                   ? geminiApiKey
-                    ? "Uses your session-only Gemini key over HTTPS (never stored on server)."
+                    ? "Uses your session-only Gemini key over HTTPS + auto-retrieves indexed repo docs."
                     : "Uses the server's GEMINI_API_KEY if configured, or add your own free session key above."
-                  : "Deterministic Tree-sitter AST + Reverse-BFS runs free and instantly with zero AI key."}
+                  : "Deterministic Tree-sitter AST + Symbol-Aware Reverse-BFS runs free with zero AI key."}
               </p>
             </div>
           )}

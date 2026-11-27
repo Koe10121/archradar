@@ -57,6 +57,8 @@ class ExportedSymbolDTO(BaseModel):
     name: str
     kind: str
     signature: str
+    start_line: int | None = None
+    end_line: int | None = None
 
 
 class GraphNodeDTO(BaseModel):
@@ -70,6 +72,7 @@ class GraphNodeDTO(BaseModel):
     exports: list[ExportedSymbolDTO] = Field(default_factory=list)
     in_degree: int
     out_degree: int
+    is_test: bool = False
 
 
 class GraphEdgeDTO(BaseModel):
@@ -84,6 +87,52 @@ class GraphEdgeDTO(BaseModel):
     imported_symbols: list[str] = Field(default_factory=list)
 
 
+class CycleFindingDTO(BaseModel):
+    """Circular dependency loop detected via Tarjan Strongly Connected Components."""
+
+    cycle_paths: list[str]
+    length: int
+    severity: Literal["warning", "high"]
+
+
+class HotspotFindingDTO(BaseModel):
+    """High-coupling or single-point-of-failure module identified deterministically."""
+
+    path: str
+    module_group: str
+    in_degree: int
+    out_degree: int
+    loc: int
+    has_tests: bool
+    touches_sensitive_boundary: bool
+    reason: str
+
+
+class LayerViolationDTO(BaseModel):
+    """Upward architectural dependency violating clean layering."""
+
+    source_path: str
+    target_path: str
+    source_layer: str
+    target_layer: str
+    imported_symbols: list[str] = Field(default_factory=list)
+    reason: str
+
+
+class ArchitectureHealthDTO(BaseModel):
+    """Zero-AI deterministic structural health summary for a graph snapshot."""
+
+    health_score: int = Field(ge=0, le=100)
+    grade: Literal["healthy", "watch", "at_risk"]
+    cycle_count: int
+    layer_violation_count: int
+    hotspot_count: int
+    untested_hub_count: int
+    cycles: list[CycleFindingDTO] = Field(default_factory=list)
+    hotspots: list[HotspotFindingDTO] = Field(default_factory=list)
+    layer_violations: list[LayerViolationDTO] = Field(default_factory=list)
+
+
 class GraphResponse(BaseModel):
     """Full repository dependency graph payload."""
 
@@ -94,6 +143,19 @@ class GraphResponse(BaseModel):
     edge_count: int
     nodes: list[GraphNodeDTO]
     edges: list[GraphEdgeDTO]
+    arch_health: ArchitectureHealthDTO | None = None
+
+
+class GitHubPRSummaryDTO(BaseModel):
+    """Summary of an open or recent Pull Request on a GitHub repository."""
+
+    number: int
+    title: str
+    state: str
+    author: str
+    html_url: str
+    updated_at: str
+    draft: bool = False
 
 
 class SnapshotSummary(BaseModel):

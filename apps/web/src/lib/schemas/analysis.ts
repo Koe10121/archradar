@@ -34,6 +34,7 @@ export const ImpactedEdgeDetailSchema = z.object({
   edge_type: z.string(),
   imported_symbols: z.array(z.string()),
   symbol_match: z.boolean(),
+  impact_tier: z.enum(["hard", "co_located"]).optional().default("hard"),
 });
 
 export const BlastRadiusResultSchema = z.object({
@@ -47,6 +48,11 @@ export const BlastRadiusResultSchema = z.object({
   sensitive_boundaries_touched: z.array(z.string()),
   symbol_matched_files: z.array(z.string()),
   impacted_edges: z.array(ImpactedEdgeDetailSchema),
+  co_located_files: z.array(z.string()).optional().default([]),
+  impacted_test_files: z.array(z.string()).optional().default([]),
+  uncovered_files: z.array(z.string()).optional().default([]),
+  candidate_doc_files: z.array(z.string()).optional().default([]),
+  suggested_test_command: z.string().nullable().optional().default(null),
 });
 
 export const CitationValidationTelemetrySchema = z.object({

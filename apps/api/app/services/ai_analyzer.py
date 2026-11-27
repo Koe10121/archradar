@@ -34,6 +34,9 @@ You receive:
 Rules:
 - Cite ONLY exact file paths that appear in the provided deterministic subgraph
   (`entry_file` and `affected_files`). Never invent or guess file paths.
+- In `doc_drift_alerts`, cite ONLY documentation file paths that appear under
+  `## Architecture & Documentation Excerpts` (return an empty list if none apply).
+- Reference `impacted_test_files` and `uncovered_files` when recommending targeted tests.
 - Reason specifically about broken exported symbols, downstream callers, sensitive
   boundaries, and documentation drift.
 - Return valid JSON matching the requested schema."""
@@ -502,8 +505,16 @@ class AIAnalyzer:
             "direct_files": blast_radius.direct,
             "hop_1_dependents": blast_radius.hop_1,
             "hop_2_top_dependents": hop2_sorted,
+            "co_located_pruned_files": blast_radius.co_located_files[:15],
+            "impacted_test_files": blast_radius.impacted_test_files[:15],
+            "uncovered_files": blast_radius.uncovered_files[:15],
+            "suggested_test_command": blast_radius.suggested_test_command,
             "nodes": selected_nodes,
-            "impacted_edges": [edge.model_dump() for edge in blast_radius.impacted_edges[:60]],
+            "impacted_edges": [
+                edge.model_dump()
+                for edge in blast_radius.impacted_edges
+                if edge.impact_tier == "hard"
+            ][:60],
         }
 
     def build_user_prompt(
@@ -572,6 +583,7 @@ class AIAnalyzer:
         doc_context: dict[str, str] | None = None,
         raw_diff: str | None = None,
         max_diff_chars: int = 12_000,
+        valid_doc_paths: set[str] | None = None,
     ) -> AIAnalysisExecutionResult:
         """Execute structured AI analysis with 1 schema retry and citation verification."""
         started = time.perf_counter()
@@ -641,7 +653,14 @@ class AIAnalyzer:
             )
 
         valid_paths = {node.path for node in nodes}
-        verified_report, telemetry = validate_report_citations(parsed_report, valid_paths)
+        effective_doc_paths = valid_doc_paths
+        if effective_doc_paths is None and doc_context:
+            effective_doc_paths = set(doc_context.keys())
+        verified_report, telemetry = validate_report_citations(
+            parsed_report,
+            valid_paths,
+            valid_doc_paths=effective_doc_paths,
+        )
         latency_ms = max(1, int((time.perf_counter() - started) * 1000))
         cost_usd = estimate_cost_usd(total_prompt_tokens, total_completion_tokens, model_used)
 

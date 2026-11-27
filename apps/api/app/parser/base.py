@@ -3,12 +3,16 @@
 import posixpath
 import re
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
 EdgeKind = Literal["import", "re_export", "dynamic_import"]
 _WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:")
+_TEST_DIRS = frozenset(
+    {"test", "tests", "__tests__", "spec", "specs", "e2e", "cypress", "playwright"}
+)
 
 
 def normalize_repo_path(raw_path: str) -> str:
@@ -47,6 +51,46 @@ def infer_module_group(repo_rel_path: str) -> str:
     return parts[0]
 
 
+def is_test_file(repo_rel_path: str) -> bool:
+    """Classify whether a normalized repository file path is an automated test/spec file."""
+    cleaned = repo_rel_path.strip().replace("\\", "/")
+    parts = [part for part in cleaned.split("/") if part]
+    if not parts:
+        return False
+
+    lower_dirs = [part.lower() for part in parts[:-1]]
+    if any(seg in _TEST_DIRS for seg in lower_dirs):
+        return True
+
+    filename = parts[-1]
+    lower_name = filename.lower()
+    if ".test." in lower_name or ".spec." in lower_name:
+        return True
+    if lower_name.startswith("test_") and lower_name.endswith(".py"):
+        return True
+    if lower_name.endswith(("_test.py", "_test.go", "_test.rs")):
+        return True
+    return filename.endswith(("Test.java", "Tests.java", "IT.java"))
+
+
+def find_nearest_config[T](source_path: str, config_by_dir: Mapping[str, T]) -> T | None:
+    """Find the closest ancestor directory config entry for a repository-relative file path."""
+    if not config_by_dir:
+        return None
+    cur = posixpath.dirname(source_path.strip("/"))
+    while True:
+        normalized_dir = "" if cur == "." else cur
+        if normalized_dir in config_by_dir:
+            return config_by_dir[normalized_dir]
+        if not normalized_dir:
+            break
+        parent = posixpath.dirname(normalized_dir)
+        if parent == normalized_dir:
+            break
+        cur = parent
+    return None
+
+
 @dataclass(frozen=True)
 class ExportedSymbol:
     """Exported function, class, type, or symbol extracted from a file."""
@@ -54,6 +98,8 @@ class ExportedSymbol:
     name: str
     kind: str
     signature: str
+    start_line: int | None = None
+    end_line: int | None = None
 
     def to_dict(self) -> dict[str, object]:
         """Convert to JSON-serializable dictionary for FileNode.exports_json."""
@@ -61,6 +107,8 @@ class ExportedSymbol:
             "name": self.name,
             "kind": self.kind,
             "signature": self.signature,
+            "start_line": self.start_line,
+            "end_line": self.end_line,
         }
 
 
@@ -96,6 +144,7 @@ class AliasConfig:
     base_url: str = ""
     paths: dict[str, list[str]] = field(default_factory=dict)
     go_module_path: str = ""
+    config_dir: str = ""
 
 
 class LanguageAdapter(ABC):

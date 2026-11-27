@@ -3,8 +3,9 @@
 import hashlib
 import hmac
 import re
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from typing import Any
 
 import httpx
 from unidiff.patch import Hunk, PatchedFile, PatchSet
@@ -61,6 +62,7 @@ class ParsedDiff:
     changed_symbols_by_file: dict[str, set[str]]
     truncated_diff: str
     raw_diff: str = ""
+    top_level_edited_files: set[str] = field(default_factory=set)
 
 
 @dataclass(frozen=True)
@@ -240,18 +242,46 @@ def prioritize_and_truncate_diff(
     return f"{assembled}{_TRUNCATION_FOOTER}"
 
 
+def _is_pure_import_header(line_text: str) -> bool:
+    stripped = line_text.strip()
+    if stripped.startswith("export "):
+        return False
+    return stripped.startswith(("import ", "from ", "package ", "use "))
+
+
+def _extract_symbol_spans(
+    raw_exports: Sequence[Mapping[str, object]],
+) -> list[tuple[int, int, str]]:
+    spans: list[tuple[int, int, str]] = []
+    for item in raw_exports:
+        name = item.get("name")
+        start = item.get("start_line")
+        end = item.get("end_line")
+        if (
+            isinstance(name, str)
+            and name
+            and isinstance(start, int)
+            and isinstance(end, int)
+            and start <= end
+        ):
+            spans.append((start, end, name))
+    return spans
+
+
 def parse_unified_diff(
     raw_diff: str,
     max_chars: int = 12_000,
     *,
     in_degree_by_file: Mapping[str, int] | None = None,
     sensitive_files: set[str] | None = None,
+    exports_by_file: Mapping[str, Sequence[Mapping[str, object]]] | None = None,
 ) -> ParsedDiff:
-    """Parse unified diff into normalized file paths, changed symbols, and bounded diff text."""
+    """Parse unified diff into normalized file paths, AST-mapped symbols, and bounded diff text."""
     patch_set = PatchSet(raw_diff)
     changed_files: list[str] = []
     seen_files: set[str] = set()
     changed_symbols_by_file: dict[str, set[str]] = {}
+    top_level_edited_files: set[str] = set()
 
     for patched_file in patch_set:
         target = _strip_diff_prefix(patched_file.target_file)
@@ -265,14 +295,37 @@ def parse_unified_diff(
             changed_files.append(rel_path)
 
         symbols = changed_symbols_by_file.setdefault(rel_path, set())
+        file_spans = (
+            _extract_symbol_spans(exports_by_file.get(rel_path, ()))
+            if exports_by_file is not None
+            else []
+        )
+
         for hunk in patched_file:
-            if hunk.section_header:
+            hunk_has_code_edit = False
+            for line in hunk:
+                if not (line.is_added or line.is_removed):
+                    continue
+                for match in _SYMBOL_DEF_RE.finditer(line.value):
+                    symbols.add(match.group(1))
+
+                if _is_comment_or_blank_line(line.value):
+                    continue
+                hunk_has_code_edit = True
+
+                line_no = line.target_line_no if line.is_added else line.source_line_no
+                if file_spans and line_no is not None:
+                    matched_span = False
+                    for s_start, s_end, s_name in file_spans:
+                        if s_start <= line_no <= s_end:
+                            symbols.add(s_name)
+                            matched_span = True
+                    if not matched_span and not _is_pure_import_header(line.value):
+                        top_level_edited_files.add(rel_path)
+
+            if hunk_has_code_edit and hunk.section_header and not file_spans:
                 for match in _SYMBOL_DEF_RE.finditer(hunk.section_header):
                     symbols.add(match.group(1))
-            for line in hunk:
-                if line.is_added or line.is_removed:
-                    for match in _SYMBOL_DEF_RE.finditer(line.value):
-                        symbols.add(match.group(1))
 
     truncated_diff = prioritize_and_truncate_diff(
         raw_diff,
@@ -286,6 +339,7 @@ def parse_unified_diff(
         changed_symbols_by_file=changed_symbols_by_file,
         truncated_diff=truncated_diff,
         raw_diff=raw_diff,
+        top_level_edited_files=top_level_edited_files,
     )
 
 
@@ -328,6 +382,67 @@ async def fetch_github_pr_diff(
     title = str(meta.get("title") or f"PR #{pr_number}")
     body = str(meta.get("body") or "")
     return title, body, pr_number, diff_resp.text
+
+
+async def fetch_github_repo_prs(
+    owner: str,
+    repo: str,
+    *,
+    github_token: str = "",
+    limit: int = 8,
+) -> list[dict[str, Any]]:
+    """Fetch recent open and closed Pull Requests for a GitHub repository."""
+    headers = {
+        "User-Agent": "ArchRadar-PR-Analyzer/0.1",
+        "Accept": "application/vnd.github+json",
+    }
+    if github_token:
+        headers["Authorization"] = f"Bearer {github_token}"
+
+    url = f"https://api.github.com/repos/{owner}/{repo}/pulls"
+    params: dict[str, str | int] = {
+        "state": "all",
+        "sort": "updated",
+        "direction": "desc",
+        "per_page": max(1, min(limit, 20)),
+    }
+    async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
+        resp = await client.get(url, headers=headers, params=params)
+        resp.raise_for_status()
+        payload = resp.json()
+
+    if not isinstance(payload, list):
+        return []
+
+    results: list[dict[str, Any]] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        num = item.get("number")
+        html_url = item.get("html_url")
+        if not isinstance(num, int) or not isinstance(html_url, str):
+            continue
+        user_obj = item.get("user")
+        author = (
+            str(user_obj.get("login"))
+            if isinstance(user_obj, dict) and user_obj.get("login")
+            else "unknown"
+        )
+        merged_at = item.get("merged_at")
+        raw_state = str(item.get("state") or "open")
+        effective_state = "merged" if (raw_state == "closed" and merged_at) else raw_state
+        results.append(
+            {
+                "number": num,
+                "title": str(item.get("title") or f"PR #{num}"),
+                "state": effective_state,
+                "author": author,
+                "html_url": html_url,
+                "updated_at": str(item.get("updated_at") or ""),
+                "draft": bool(item.get("draft", False)),
+            }
+        )
+    return results
 
 
 def verify_github_webhook_signature(

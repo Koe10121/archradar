@@ -13,8 +13,10 @@ from app.core.config import Settings
 from app.core.rate_limit import RateLimiter, enforce_rate_limit
 from app.db.session import create_session_factory
 from app.models.entities import DependencyEdge, FileNode, GraphSnapshot, Repository
+from app.parser.base import is_test_file
 from app.schemas.repo import (
     ExportedSymbolDTO,
+    GitHubPRSummaryDTO,
     GraphEdgeDTO,
     GraphNodeDTO,
     GraphResponse,
@@ -24,11 +26,15 @@ from app.schemas.repo import (
     SnapshotDiffResponse,
     SnapshotSummary,
 )
+from app.services.arch_health import compute_architecture_health
+from app.services.blast_radius import EdgeSnapshot, NodeSnapshot
+from app.services.github import fetch_github_repo_prs
 from app.services.indexer import RepoIndexer, parse_github_repo_url
 from app.services.snapshot_diff import compute_snapshot_diff
 
 router = APIRouter(prefix="/api/repos", tags=["repositories"])
 _index_limiter = RateLimiter(max_requests=12, window_seconds=60)
+_gh_prs_limiter = RateLimiter(max_requests=25, window_seconds=60)
 
 
 @router.post("/index", response_model=RepoIndexResponse, status_code=status.HTTP_201_CREATED)
@@ -202,6 +208,7 @@ async def get_repository_graph(
             exports=[ExportedSymbolDTO.model_validate(item) for item in node.exports_json],
             in_degree=node.in_degree,
             out_degree=node.out_degree,
+            is_test=is_test_file(node.path),
         )
         for node in nodes
     ]
@@ -218,6 +225,30 @@ async def get_repository_graph(
         for edge in edges
     ]
 
+    health_nodes = [
+        NodeSnapshot(
+            path=node.path,
+            language=node.language,
+            module_group=node.module_group,
+            loc=node.loc,
+            in_degree=node.in_degree,
+            out_degree=node.out_degree,
+            exports=list(node.exports_json),
+        )
+        for node in nodes
+    ]
+    health_edges = [
+        EdgeSnapshot(
+            source_path=path_by_id[edge.source_node_id],
+            target_path=path_by_id[edge.target_node_id],
+            edge_type=edge.edge_type,
+            imported_symbols=list(edge.imported_symbols),
+        )
+        for edge in edges
+        if edge.source_node_id in path_by_id and edge.target_node_id in path_by_id
+    ]
+    arch_health = compute_architecture_health(health_nodes, health_edges)
+
     return GraphResponse(
         repository_id=repo.id,
         snapshot_id=snapshot.id,
@@ -226,7 +257,64 @@ async def get_repository_graph(
         edge_count=snapshot.edge_count,
         nodes=node_dtos,
         edges=edge_dtos,
+        arch_health=arch_health,
     )
+
+
+@router.get("/{repo_id}/github-prs", response_model=list[GitHubPRSummaryDTO])
+async def list_repository_github_prs(
+    repo_id: UUID,
+    request: Request,
+) -> list[GitHubPRSummaryDTO]:
+    """Fetch recent open and merged Pull Requests directly from GitHub for 1-click selection."""
+    settings = cast(Settings, request.app.state.settings)
+    enforce_rate_limit(request, _gh_prs_limiter, settings)
+    engine = cast(AsyncEngine, request.app.state.db_engine)
+    session_factory = create_session_factory(engine)
+
+    async with session_factory() as session:
+        repo_result = await session.execute(select(Repository).where(Repository.id == repo_id))
+        repo = repo_result.scalar_one_or_none()
+        if repo is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Repository not found",
+            )
+
+    if repo.is_demo:
+        return []
+
+    try:
+        owner, name = parse_github_repo_url(repo.url)
+    except ValueError:
+        return []
+
+    try:
+        raw_prs = await fetch_github_repo_prs(
+            owner,
+            name,
+            github_token=settings.github_token,
+            limit=8,
+        )
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404:
+            return []
+        if exc.response.status_code in {403, 429}:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="GitHub API rate limit reached while listing PRs. Paste a PR URL or diff.",
+            ) from exc
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to fetch Pull Requests from GitHub.",
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Could not reach GitHub API to list Pull Requests.",
+        ) from exc
+
+    return [GitHubPRSummaryDTO.model_validate(item) for item in raw_prs]
 
 
 @router.get("/{repo_id}/snapshots", response_model=list[SnapshotSummary])

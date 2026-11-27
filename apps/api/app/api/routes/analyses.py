@@ -13,7 +13,14 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from app.core.config import Settings
 from app.core.rate_limit import RateLimiter, enforce_rate_limit
 from app.db.session import create_session_factory
-from app.models.entities import DependencyEdge, FileNode, GraphSnapshot, PRAnalysis, Repository
+from app.models.entities import (
+    DependencyEdge,
+    FileNode,
+    GraphSnapshot,
+    PRAnalysis,
+    Repository,
+    SnapshotDocument,
+)
 from app.schemas.analysis import (
     AnalyzePRRequest,
     BlastRadiusReport,
@@ -34,6 +41,7 @@ from app.services.ai_analyzer import (
 )
 from app.services.blast_radius import BlastRadiusCalculator, EdgeSnapshot, NodeSnapshot
 from app.services.citation_validator import validate_report_citations
+from app.services.doc_retriever import retrieve_relevant_doc_excerpts
 from app.services.github import fetch_github_pr_diff, parse_unified_diff
 from app.services.pr_commenter import build_pr_comment_response
 
@@ -208,13 +216,23 @@ async def analyze_pull_request(
                 ) from exc
 
         in_degree_by_file = {n.path: n.in_degree for n in node_snapshots}
+        exports_by_file = {n.path: n.exports for n in node_snapshots}
         try:
-            parsed_diff = parse_unified_diff(raw_diff, in_degree_by_file=in_degree_by_file)
+            parsed_diff = parse_unified_diff(
+                raw_diff,
+                in_degree_by_file=in_degree_by_file,
+                exports_by_file=exports_by_file,
+            )
         except Exception as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Failed to parse unified diff: {exc}",
             ) from exc
+
+        docs_result = await session.execute(
+            select(SnapshotDocument).where(SnapshotDocument.snapshot_id == snapshot.id)
+        )
+        indexed_docs = {doc.path: doc.content for doc in docs_result.scalars().all()}
 
         calculator = BlastRadiusCalculator()
         blast_radius = calculator.calculate(
@@ -222,7 +240,22 @@ async def analyze_pull_request(
             edges=edge_snapshots,
             changed_files=parsed_diff.changed_files,
             changed_symbols_by_file=parsed_diff.changed_symbols_by_file,
+            top_level_edited_files=parsed_diff.top_level_edited_files,
         )
+
+        retrieved_docs, candidate_doc_files = retrieve_relevant_doc_excerpts(
+            indexed_docs,
+            changed_files=parsed_diff.changed_files,
+            hop_1_files=blast_radius.hop_1,
+            changed_symbols_by_file=parsed_diff.changed_symbols_by_file,
+            raw_diff=raw_diff,
+        )
+        if candidate_doc_files:
+            blast_radius = blast_radius.model_copy(
+                update={"candidate_doc_files": candidate_doc_files}
+            )
+        effective_doc_context: dict[str, str] = {**retrieved_docs, **payload.doc_context}
+        valid_doc_paths = set(indexed_docs.keys()) | set(payload.doc_context.keys())
 
         ai_report: BlastRadiusReport | None = None
         citation_telemetry: CitationValidationTelemetry | None = None
@@ -266,8 +299,9 @@ async def analyze_pull_request(
                     truncated_diff=parsed_diff.truncated_diff,
                     nodes=node_snapshots,
                     blast_radius=blast_radius,
-                    doc_context=payload.doc_context or None,
+                    doc_context=effective_doc_context or None,
                     raw_diff=raw_diff,
+                    valid_doc_paths=valid_doc_paths or None,
                 )
             except GeminiProviderError as exc:
                 logger.warning(

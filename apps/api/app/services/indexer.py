@@ -12,16 +12,24 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.entities import DependencyEdge, FileNode, GraphSnapshot, Repository
+from app.models.entities import (
+    DependencyEdge,
+    FileNode,
+    GraphSnapshot,
+    Repository,
+    SnapshotDocument,
+)
 from app.parser.base import (
     AliasConfig,
     ParsedFile,
     ensure_within_root,
+    find_nearest_config,
+    is_test_file,
     normalize_repo_path,
 )
-from app.parser.go import load_go_module_path
+from app.parser.go import load_go_mod_hierarchy, load_go_module_path
 from app.parser.registry import ParserRegistry
-from app.parser.typescript import load_tsconfig_aliases
+from app.parser.typescript import load_tsconfig_aliases, load_tsconfig_hierarchy
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +57,13 @@ _GITHUB_REPO_RE = re.compile(
 )
 MAX_ZIPBALL_BYTES = 25 * 1024 * 1024
 MAX_INDEXED_FILES = 600
+MAX_DOC_FILES = 15
+MAX_DOC_CHARS = 32_000
+_PRIMARY_SOURCE_DIRS = frozenset(
+    {"src", "app", "apps", "packages", "internal", "pkg", "cmd", "lib", "server"}
+)
+_ROOT_DOC_PREFIXES = ("readme", "architecture", "contributing", "gemini", "claude")
+_OPENAPI_FILENAMES = frozenset({"openapi.yaml", "openapi.yml", "openapi.json"})
 
 
 def parse_github_repo_url(url: str) -> tuple[str, str]:
@@ -68,8 +83,16 @@ class RepoIndexer:
     def __init__(self, registry: ParserRegistry | None = None) -> None:
         self._registry = registry or ParserRegistry()
 
+    def _file_priority_key(self, rel_posix: str) -> tuple[int, str]:
+        if is_test_file(rel_posix):
+            return (2, rel_posix)
+        parts = [p.lower() for p in rel_posix.split("/") if p]
+        if parts and parts[0] in _PRIMARY_SOURCE_DIRS:
+            return (0, rel_posix)
+        return (1, rel_posix)
+
     def _collect_source_files(self, repo_root: Path) -> list[tuple[str, Path]]:
-        files: list[tuple[str, Path]] = []
+        candidates: list[tuple[str, Path]] = []
         resolved_root = repo_root.resolve()
 
         for path in sorted(resolved_root.rglob("*")):
@@ -82,16 +105,64 @@ class RepoIndexer:
             if self._registry.get_adapter(rel_posix) is None:
                 continue
             ensure_within_root(resolved_root, path)
-            files.append((rel_posix, path))
-            if len(files) >= MAX_INDEXED_FILES:
-                logger.warning(
-                    "Repository %s reached MAX_INDEXED_FILES (%d); truncating remaining files",
-                    resolved_root,
-                    MAX_INDEXED_FILES,
-                )
-                break
+            candidates.append((rel_posix, path))
 
-        return files
+        candidates.sort(key=lambda item: self._file_priority_key(item[0]))
+        if len(candidates) > MAX_INDEXED_FILES:
+            logger.warning(
+                "Repository %s reached MAX_INDEXED_FILES (%d of %d); prioritizing production files",
+                resolved_root,
+                MAX_INDEXED_FILES,
+                len(candidates),
+            )
+            candidates = candidates[:MAX_INDEXED_FILES]
+
+        return sorted(candidates, key=lambda item: item[0])
+
+    def _collect_doc_files(self, repo_root: Path) -> list[tuple[str, str]]:
+        """Collect bounded Markdown and OpenAPI docs safely for automatic doc-drift grounding."""
+        resolved_root = repo_root.resolve()
+        scored_docs: list[tuple[int, str, Path]] = []
+
+        for path in sorted(resolved_root.rglob("*")):
+            if path.is_symlink() or not path.is_file():
+                continue
+            rel = path.relative_to(resolved_root)
+            if any(part in IGNORED_DIRS for part in rel.parts[:-1]):
+                continue
+            rel_posix = normalize_repo_path(rel.as_posix())
+            lower_name = path.name.lower()
+            parts_lower = [p.lower() for p in rel.parts]
+
+            priority: int | None = None
+            if len(parts_lower) == 1 and lower_name.endswith(".md"):
+                if lower_name.startswith("readme"):
+                    priority = 0
+                elif lower_name.startswith(_ROOT_DOC_PREFIXES):
+                    priority = 1
+                else:
+                    priority = 3
+            elif parts_lower[0] in {"docs", "doc"} and lower_name.endswith(".md"):
+                priority = 1 if "arch" in lower_name or "api" in lower_name else 2
+            elif lower_name in _OPENAPI_FILENAMES:
+                priority = 2
+
+            if priority is None:
+                continue
+            ensure_within_root(resolved_root, path)
+            scored_docs.append((priority, rel_posix, path))
+
+        scored_docs.sort(key=lambda item: (item[0], item[1]))
+        collected: list[tuple[str, str]] = []
+        for _, rel_posix, doc_path in scored_docs[:MAX_DOC_FILES]:
+            try:
+                raw_text = doc_path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            trimmed = raw_text[:MAX_DOC_CHARS].strip()
+            if trimmed:
+                collected.append((rel_posix, trimmed))
+        return collected
 
     async def index_local_directory(
         self,
@@ -143,12 +214,15 @@ class RepoIndexer:
         try:
             source_entries = self._collect_source_files(resolved_root)
             known_files = {rel_path for rel_path, _ in source_entries}
-            ts_aliases = load_tsconfig_aliases(resolved_root)
-            go_module_path = load_go_module_path(resolved_root)
-            alias_config = AliasConfig(
-                base_url=ts_aliases.base_url,
-                paths=ts_aliases.paths,
-                go_module_path=go_module_path,
+            ts_hierarchy = load_tsconfig_hierarchy(resolved_root, ignored_dirs=IGNORED_DIRS)
+            go_hierarchy = load_go_mod_hierarchy(resolved_root, ignored_dirs=IGNORED_DIRS)
+            root_ts = ts_hierarchy.get("") or load_tsconfig_aliases(resolved_root)
+            root_go_mod = load_go_module_path(resolved_root)
+            fallback_alias = AliasConfig(
+                base_url=root_ts.base_url,
+                paths=root_ts.paths,
+                go_module_path=root_go_mod,
+                config_dir=root_ts.config_dir,
             )
 
             parsed_by_path: dict[str, ParsedFile] = {}
@@ -168,12 +242,26 @@ class RepoIndexer:
                 adapter = self._registry.get_adapter(rel_path)
                 if adapter is None:
                     continue
+                near_ts = find_nearest_config(rel_path, ts_hierarchy)
+                near_go = find_nearest_config(rel_path, go_hierarchy)
+                file_alias = AliasConfig(
+                    base_url=near_ts.base_url if near_ts else fallback_alias.base_url,
+                    paths=near_ts.paths if near_ts else fallback_alias.paths,
+                    go_module_path=(
+                        near_go.go_module_path if near_go else fallback_alias.go_module_path
+                    ),
+                    config_dir=(
+                        near_go.config_dir
+                        if parsed.language == "go" and near_go
+                        else (near_ts.config_dir if near_ts else fallback_alias.config_dir)
+                    ),
+                )
                 for raw_imp in parsed.imports:
                     targets = adapter.resolve_import(
                         source_path=rel_path,
                         raw_import=raw_imp,
                         known_files=known_files,
-                        alias_config=alias_config,
+                        alias_config=file_alias,
                     )
                     for target in targets:
                         if target == rel_path or target not in parsed_by_path:
@@ -216,6 +304,16 @@ class RepoIndexer:
                     imported_symbols=symbols,
                 )
                 session.add(edge)
+
+            for doc_path, doc_content in self._collect_doc_files(resolved_root):
+                session.add(
+                    SnapshotDocument(
+                        id=uuid4(),
+                        snapshot_id=snapshot.id,
+                        path=doc_path,
+                        content=doc_content,
+                    )
+                )
 
             snapshot.file_count = len(node_by_path)
             snapshot.edge_count = len(edge_symbols)

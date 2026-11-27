@@ -294,6 +294,30 @@ class SimulatedGroundedLLMProvider:
                     removed.append(body)
         return added, removed
 
+    def _is_pure_local_binding_rename(
+        self,
+        added_lines: list[str],
+        removed_lines: list[str],
+    ) -> bool:
+        if len(added_lines) != len(removed_lines) or not removed_lines:
+            return False
+        local_decl_re = re.compile(
+            r"^\s*(?:const|let|var)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$"
+        )
+        old_decl = local_decl_re.match(removed_lines[0])
+        new_decl = local_decl_re.match(added_lines[0])
+        if old_decl is None or new_decl is None:
+            return False
+        old_var, old_rhs = old_decl.group(1), old_decl.group(2).strip()
+        new_var, new_rhs = new_decl.group(1), new_decl.group(2).strip()
+        if old_rhs != new_rhs or old_var == new_var:
+            return False
+        for rem, add in zip(removed_lines[1:], added_lines[1:], strict=True):
+            replaced = re.sub(rf"\b{re.escape(old_var)}\b", new_var, rem.strip())
+            if replaced != add.strip():
+                return False
+        return True
+
     def _is_comment_or_blank(self, line: str) -> bool:
         stripped = line.strip()
         if not stripped:
@@ -336,7 +360,11 @@ class SimulatedGroundedLLMProvider:
         has_symbol_match = isinstance(impacted_edges, list) and any(
             isinstance(edge, dict) and edge.get("symbol_match") is True for edge in impacted_edges
         )
-        if has_symbol_match and removed_lines:
+        if (
+            has_symbol_match
+            and removed_lines
+            and not self._is_pure_local_binding_rename(added_lines, removed_lines)
+        ):
             return True
 
         removed_joined = "\n".join(removed_lines)
@@ -693,13 +721,19 @@ async def run_benchmark_async(
 
         raw_diff_text = str(case_data["diff"])
         in_degree_by_file = {n.path: n.in_degree for n in fixture.nodes}
+        exports_by_file = {n.path: n.exports for n in fixture.nodes}
         t_start = time.perf_counter()
-        parsed_diff = parse_unified_diff(raw_diff_text, in_degree_by_file=in_degree_by_file)
+        parsed_diff = parse_unified_diff(
+            raw_diff_text,
+            in_degree_by_file=in_degree_by_file,
+            exports_by_file=exports_by_file,
+        )
         blast_radius = calculator.calculate(
             nodes=fixture.nodes,
             edges=fixture.edges,
             changed_files=parsed_diff.changed_files,
             changed_symbols_by_file=parsed_diff.changed_symbols_by_file,
+            top_level_edited_files=parsed_diff.top_level_edited_files,
         )
         det_ms = (time.perf_counter() - t_start) * 1000.0
 

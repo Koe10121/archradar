@@ -73,6 +73,9 @@ class GraphSnapshot(Base):
     dependency_edges: Mapped[list["DependencyEdge"]] = relationship(
         back_populates="snapshot", cascade="all, delete-orphan"
     )
+    documents: Mapped[list["SnapshotDocument"]] = relationship(
+        back_populates="snapshot", cascade="all, delete-orphan"
+    )
 
 
 class FileNode(Base):
@@ -125,6 +128,24 @@ class DependencyEdge(Base):
     )
 
     snapshot: Mapped[GraphSnapshot] = relationship(back_populates="dependency_edges")
+
+
+class SnapshotDocument(Base):
+    """Indexed repository Markdown or OpenAPI documentation file for doc-drift detection."""
+
+    __tablename__ = "snapshot_documents"
+    __table_args__ = (
+        Index("ix_snapshot_documents_snapshot_path", "snapshot_id", "path", unique=True),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    snapshot_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("graph_snapshots.id", ondelete="CASCADE"), nullable=False
+    )
+    path: Mapped[str] = mapped_column(Text, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+
+    snapshot: Mapped[GraphSnapshot] = relationship(back_populates="documents")
 
 
 class PRAnalysis(Base):

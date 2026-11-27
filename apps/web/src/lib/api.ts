@@ -11,11 +11,13 @@ import {
 } from "@/lib/schemas/analysis";
 import { HealthResponseSchema, type HealthResponse } from "@/lib/schemas/health";
 import {
+  GitHubPRListSchema,
   GraphResponseSchema,
   RepoIndexResponseSchema,
   RepositoryListSchema,
   SnapshotDiffResponseSchema,
   SnapshotListSchema,
+  type GitHubPRSummary,
   type GraphResponse,
   type RepoIndexResponse,
   type RepositorySummary,
@@ -56,7 +58,7 @@ export function getApiBaseUrl(isServer: boolean): string {
 
 async function requestJson<T>(
   path: string,
-  schema: z.ZodType<T>,
+  schema: z.ZodType<T, z.ZodTypeDef, unknown>,
   options?: {
     isServer?: boolean;
     method?: "GET" | "POST";
@@ -204,6 +206,16 @@ export async function fetchRepositoryAnalyses(
     `/api/repos/${encodeURIComponent(repoId)}/analyses`,
     PRAnalysisListSchema,
     { isServer: options?.isServer }
+  );
+}
+
+export async function fetchRepositoryGitHubPRs(
+  repoId: string
+): Promise<ApiResult<GitHubPRSummary[]>> {
+  return requestJson(
+    `/api/repos/${encodeURIComponent(repoId)}/github-prs`,
+    GitHubPRListSchema,
+    { timeoutMs: 12_000 }
   );
 }
 

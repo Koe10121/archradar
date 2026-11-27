@@ -17,6 +17,7 @@ from app.parser.base import (
     LanguageAdapter,
     ParsedFile,
     RawImport,
+    ensure_within_root,
     infer_module_group,
     normalize_repo_path,
 )
@@ -63,33 +64,61 @@ def _strip_jsonc(raw: str) -> str:
     return _TRAILING_COMMA_RE.sub(r"\1", no_lines)
 
 
-def load_tsconfig_aliases(repo_root: Path) -> AliasConfig:
-    """Load compilerOptions.baseUrl and paths from tsconfig.json or jsconfig.json."""
-    for filename in ("tsconfig.json", "jsconfig.json"):
-        candidate = repo_root / filename
-        if not candidate.is_file():
-            continue
+def _node_span(node: tree_sitter.Node) -> tuple[int, int]:
+    return node.start_point[0] + 1, node.end_point[0] + 1
+
+
+def _load_single_tsconfig(
+    config_path: Path,
+    resolved_root: Path,
+    visited: set[Path] | None = None,
+) -> AliasConfig:
+    seen = visited if visited is not None else set()
+    resolved_cfg = ensure_within_root(resolved_root, config_path)
+    if resolved_cfg in seen or not resolved_cfg.is_file():
+        return AliasConfig()
+    seen.add(resolved_cfg)
+
+    try:
+        raw_text = resolved_cfg.read_text(encoding="utf-8", errors="replace")
+        parsed = json.loads(_strip_jsonc(raw_text))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        logger.warning("Failed to parse %s for path aliases: %s", resolved_cfg.name, exc)
+        return AliasConfig()
+
+    if not isinstance(parsed, dict):
+        return AliasConfig()
+
+    rel_cfg_dir = resolved_cfg.parent.relative_to(resolved_root).as_posix()
+    config_dir = "" if rel_cfg_dir == "." else rel_cfg_dir
+
+    parent_cfg = AliasConfig(config_dir=config_dir)
+    extends_val = parsed.get("extends")
+    if isinstance(extends_val, str) and extends_val.strip().startswith("."):
+        ext_target = extends_val.strip()
+        cand_parent = resolved_cfg.parent / ext_target
+        if cand_parent.suffix.lower() != ".json":
+            cand_parent = Path(f"{cand_parent}.json")
         try:
-            raw_text = candidate.read_text(encoding="utf-8", errors="replace")
-            parsed = json.loads(_strip_jsonc(raw_text))
-        except (OSError, json.JSONDecodeError) as exc:
-            logger.warning("Failed to parse %s for path aliases: %s", filename, exc)
-            return AliasConfig()
+            checked_parent = ensure_within_root(resolved_root, cand_parent)
+            if checked_parent.is_file():
+                parent_cfg = _load_single_tsconfig(checked_parent, resolved_root, seen)
+        except ValueError:
+            pass
 
-        if not isinstance(parsed, dict):
-            return AliasConfig()
-        compiler_opts = parsed.get("compilerOptions")
-        if not isinstance(compiler_opts, dict):
-            return AliasConfig()
+    compiler_opts = parsed.get("compilerOptions")
+    base_url = parent_cfg.base_url
+    merged_paths: dict[str, list[str]] = dict(parent_cfg.paths)
+    effective_base_dir = parent_cfg.config_dir if parent_cfg.base_url else config_dir
 
-        base_url_raw = compiler_opts.get("baseUrl", "")
-        base_url = ""
+    if isinstance(compiler_opts, dict):
+        base_url_raw = compiler_opts.get("baseUrl")
         if isinstance(base_url_raw, str) and base_url_raw.strip():
             cleaned_base = posixpath.normpath(base_url_raw.strip().replace("\\", "/"))
             base_url = "" if cleaned_base == "." else cleaned_base.strip("/")
+            effective_base_dir = config_dir
 
         paths_raw = compiler_opts.get("paths")
-        paths: dict[str, list[str]] = {}
         if isinstance(paths_raw, dict):
             for key, targets in paths_raw.items():
                 if isinstance(key, str) and isinstance(targets, list):
@@ -99,11 +128,46 @@ def load_tsconfig_aliases(repo_root: Path) -> AliasConfig:
                         if isinstance(t, str) and t.strip()
                     ]
                     if valid_targets:
-                        paths[key] = valid_targets
+                        merged_paths[key] = valid_targets
 
-        return AliasConfig(base_url=base_url, paths=paths)
+    return AliasConfig(
+        base_url=base_url,
+        paths=merged_paths,
+        config_dir=effective_base_dir if (base_url or merged_paths) else config_dir,
+    )
 
+
+def load_tsconfig_aliases(repo_root: Path) -> AliasConfig:
+    """Load compilerOptions.baseUrl and paths from root tsconfig.json or jsconfig.json."""
+    resolved_root = repo_root.resolve()
+    for filename in ("tsconfig.json", "jsconfig.json"):
+        candidate = resolved_root / filename
+        if candidate.is_file():
+            return _load_single_tsconfig(candidate, resolved_root)
     return AliasConfig()
+
+
+def load_tsconfig_hierarchy(
+    repo_root: Path,
+    ignored_dirs: frozenset[str] = frozenset(),
+) -> dict[str, AliasConfig]:
+    """Discover root and nested tsconfig/jsconfig files keyed by repo-relative directory."""
+    resolved_root = repo_root.resolve()
+    configs: dict[str, AliasConfig] = {}
+
+    # Load jsconfig first so tsconfig in the same folder takes precedence
+    for filename in ("jsconfig.json", "tsconfig.json"):
+        for path in sorted(resolved_root.rglob(filename)):
+            if path.is_symlink() or not path.is_file():
+                continue
+            rel = path.relative_to(resolved_root)
+            if any(part in ignored_dirs for part in rel.parts[:-1]):
+                continue
+            rel_dir = rel.parent.as_posix()
+            key_dir = "" if rel_dir == "." else rel_dir
+            configs[key_dir] = _load_single_tsconfig(path, resolved_root)
+
+    return configs
 
 
 class TypeScriptAdapter(LanguageAdapter):
@@ -223,6 +287,7 @@ class TypeScriptAdapter(LanguageAdapter):
                     break
         specifier = _extract_string_literal(source_node)
         signature = _clean_signature(node)
+        start_line, end_line = _node_span(node)
 
         if specifier is not None:
             re_exported_symbols: list[str] = []
@@ -242,30 +307,78 @@ class TypeScriptAdapter(LanguageAdapter):
                 )
             )
             for sym in re_exported_symbols:
-                exports.append(ExportedSymbol(name=sym, kind="re_export", signature=signature))
+                exports.append(
+                    ExportedSymbol(
+                        name=sym,
+                        kind="re_export",
+                        signature=signature,
+                        start_line=start_line,
+                        end_line=end_line,
+                    )
+                )
             return
 
         is_default = any(child.type == "default" for child in node.children)
         for child in node.children:
             if child.type in {"function_declaration", "generator_function_declaration"}:
                 name = self._first_identifier(child) or ("default" if is_default else "anonymous")
-                exports.append(ExportedSymbol(name=name, kind="function", signature=signature))
+                exports.append(
+                    ExportedSymbol(
+                        name=name,
+                        kind="function",
+                        signature=signature,
+                        start_line=start_line,
+                        end_line=end_line,
+                    )
+                )
                 return
             if child.type == "class_declaration":
                 name = self._first_identifier(child) or ("default" if is_default else "Anonymous")
-                exports.append(ExportedSymbol(name=name, kind="class", signature=signature))
+                exports.append(
+                    ExportedSymbol(
+                        name=name,
+                        kind="class",
+                        signature=signature,
+                        start_line=start_line,
+                        end_line=end_line,
+                    )
+                )
                 return
             if child.type == "interface_declaration":
                 name = self._first_identifier(child) or "AnonymousInterface"
-                exports.append(ExportedSymbol(name=name, kind="interface", signature=signature))
+                exports.append(
+                    ExportedSymbol(
+                        name=name,
+                        kind="interface",
+                        signature=signature,
+                        start_line=start_line,
+                        end_line=end_line,
+                    )
+                )
                 return
             if child.type == "type_alias_declaration":
                 name = self._first_identifier(child) or "AnonymousType"
-                exports.append(ExportedSymbol(name=name, kind="type", signature=signature))
+                exports.append(
+                    ExportedSymbol(
+                        name=name,
+                        kind="type",
+                        signature=signature,
+                        start_line=start_line,
+                        end_line=end_line,
+                    )
+                )
                 return
             if child.type == "enum_declaration":
                 name = self._first_identifier(child) or "AnonymousEnum"
-                exports.append(ExportedSymbol(name=name, kind="enum", signature=signature))
+                exports.append(
+                    ExportedSymbol(
+                        name=name,
+                        kind="enum",
+                        signature=signature,
+                        start_line=start_line,
+                        end_line=end_line,
+                    )
+                )
                 return
             if child.type in {"lexical_declaration", "variable_declaration"}:
                 for sub in child.children:
@@ -273,16 +386,38 @@ class TypeScriptAdapter(LanguageAdapter):
                         var_name = self._first_identifier(sub)
                         if var_name:
                             exports.append(
-                                ExportedSymbol(name=var_name, kind="const", signature=signature)
+                                ExportedSymbol(
+                                    name=var_name,
+                                    kind="const",
+                                    signature=signature,
+                                    start_line=start_line,
+                                    end_line=end_line,
+                                )
                             )
                 return
             if child.type == "export_clause":
                 for sym in self._extract_export_clause_names(child):
-                    exports.append(ExportedSymbol(name=sym, kind="export", signature=signature))
+                    exports.append(
+                        ExportedSymbol(
+                            name=sym,
+                            kind="export",
+                            signature=signature,
+                            start_line=start_line,
+                            end_line=end_line,
+                        )
+                    )
                 return
 
         if is_default:
-            exports.append(ExportedSymbol(name="default", kind="default", signature=signature))
+            exports.append(
+                ExportedSymbol(
+                    name="default",
+                    kind="default",
+                    signature=signature,
+                    start_line=start_line,
+                    end_line=end_line,
+                )
+            )
 
     def _extract_export_clause_names(self, clause: tree_sitter.Node) -> list[str]:
         names: list[str] = []
@@ -344,7 +479,9 @@ class TypeScriptAdapter(LanguageAdapter):
             if not joined.startswith(".."):
                 candidate_bases.append(joined)
         else:
-            candidate_bases.extend(self._expand_alias_candidates(specifier, alias_config))
+            candidate_bases.extend(
+                self._expand_alias_candidates(specifier, alias_config, source_path=source_path)
+            )
 
         for base in candidate_bases:
             resolved = self._match_known_file(base, known_files)
@@ -357,10 +494,17 @@ class TypeScriptAdapter(LanguageAdapter):
         self,
         specifier: str,
         alias_config: AliasConfig | None,
+        source_path: str = "",
     ) -> list[str]:
         candidates: list[str] = []
         config = alias_config or AliasConfig()
-        base_prefix = config.base_url.strip("/")
+        cfg_dir = config.config_dir.strip("/")
+        raw_base = config.base_url.strip("/")
+        base_prefix = (
+            posixpath.normpath(posixpath.join(cfg_dir, raw_base))
+            if cfg_dir and raw_base
+            else (cfg_dir or raw_base)
+        )
 
         for pattern, targets in config.paths.items():
             if "*" in pattern:
@@ -374,12 +518,20 @@ class TypeScriptAdapter(LanguageAdapter):
                 for target in targets:
                     candidates.append(self._join_base(base_prefix, target))
 
-        if base_prefix:
+        if raw_base:
             candidates.append(self._join_base(base_prefix, specifier))
 
-        # Common Next.js/Vite default `@/` -> `src/` fallback when tsconfig isn't matched
+        # Common Next.js/Vite default `@/` -> `<pkg>/src/` or `src/` fallback
         if specifier.startswith("@/"):
             sub = specifier[2:]
+            if cfg_dir:
+                candidates.append(posixpath.normpath(posixpath.join(cfg_dir, "src", sub)))
+                candidates.append(posixpath.normpath(posixpath.join(cfg_dir, sub)))
+            parts = [p for p in source_path.split("/") if p]
+            if len(parts) >= 2 and parts[0] in {"apps", "packages"}:
+                pkg_root = f"{parts[0]}/{parts[1]}"
+                candidates.append(posixpath.normpath(posixpath.join(pkg_root, "src", sub)))
+                candidates.append(posixpath.normpath(posixpath.join(pkg_root, sub)))
             candidates.append(posixpath.normpath(posixpath.join("src", sub)))
             candidates.append(posixpath.normpath(sub))
 

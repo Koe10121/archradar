@@ -193,6 +193,28 @@ export function renderPRCommentMarkdown(analysis: PRAnalysisResponse): string {
     lines.push(`**Sensitive Boundaries Touched:** ${boundaries}`, "");
   }
 
+  if (
+    br.impacted_test_files.length > 0 ||
+    br.uncovered_files.length > 0 ||
+    Boolean(br.suggested_test_command)
+  ) {
+    lines.push("### Test Suite & Coverage Intelligence", "");
+    if (br.impacted_test_files.length > 0) {
+      lines.push(
+        `- **Impacted Tests (${br.impacted_test_files.length}):** ${formatFileList(br.impacted_test_files)}`
+      );
+    }
+    if (br.suggested_test_command) {
+      lines.push(`- **Run Targeted Tests:** \`${br.suggested_test_command}\``);
+    }
+    if (br.uncovered_files.length > 0) {
+      lines.push(
+        `- **Coverage Blind Spots (${br.uncovered_files.length} untested prod files):** ${formatFileList(br.uncovered_files)}`
+      );
+    }
+    lines.push("");
+  }
+
   lines.push(...renderMermaidSubgraph(br));
 
   if (report && report.impacted_flows.length > 0) {

@@ -6,6 +6,7 @@ from app.parser.base import normalize_repo_path
 from app.schemas.analysis import (
     BlastRadiusReport,
     CitationValidationTelemetry,
+    DocDriftAlert,
     ImpactedFlow,
 )
 
@@ -23,8 +24,10 @@ def _is_valid_path(raw_path: str, valid_paths: set[str]) -> str | None:
 def validate_report_citations(
     report: BlastRadiusReport,
     valid_paths: set[str],
+    *,
+    valid_doc_paths: set[str] | None = None,
 ) -> tuple[BlastRadiusReport, CitationValidationTelemetry]:
-    """Verify every cited file path exists in the snapshot graph; strip phantom files."""
+    """Verify every cited file and doc path exists in the snapshot; strip phantom paths."""
     total_cited = 0
     valid_cited = 0
     stripped_paths: list[str] = []
@@ -65,6 +68,21 @@ def validate_report_citations(
             )
         )
 
+    verified_doc_alerts: list[DocDriftAlert] = list(report.doc_drift_alerts)
+    if valid_doc_paths:
+        allowed_docs = valid_doc_paths | valid_paths
+        verified_doc_alerts = []
+        for alert in report.doc_drift_alerts:
+            total_cited += 1
+            checked_doc = _is_valid_path(alert.doc_file, allowed_docs)
+            if checked_doc is None:
+                stripped_paths.append(alert.doc_file)
+            else:
+                valid_cited += 1
+                verified_doc_alerts.append(
+                    alert.model_copy(update={"doc_file": checked_doc})
+                )
+
     hallucination_caught = len(stripped_paths)
     if hallucination_caught > 0:
         logger.warning(
@@ -73,7 +91,12 @@ def validate_report_citations(
             stripped_paths,
         )
 
-    sanitized_report = report.model_copy(update={"impacted_flows": verified_flows})
+    sanitized_report = report.model_copy(
+        update={
+            "impacted_flows": verified_flows,
+            "doc_drift_alerts": verified_doc_alerts,
+        }
+    )
     telemetry = CitationValidationTelemetry(
         total_cited_paths=total_cited,
         valid_cited_paths=valid_cited,

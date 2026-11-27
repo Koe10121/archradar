@@ -11,10 +11,11 @@ import {
   useReactFlow,
   type Edge,
 } from "@xyflow/react";
-import { ArrowDownUp, ArrowLeftRight, Maximize2 } from "lucide-react";
+import { ArrowDownUp, ArrowLeftRight, Filter, FlaskConical, Maximize2 } from "lucide-react";
 
 import { FileNode, type DriftNodeStatus, type FileFlowNode } from "@/components/graph/file-node";
 import { Button } from "@/components/ui/button";
+import { isTestFilePath } from "@/lib/arch-health";
 import {
   classifyBlastTier,
   computeDagreLayout,
@@ -33,6 +34,10 @@ interface ArchitectureCanvasProps {
   onSelectNode: (nodeId: string | null) => void;
   blastRadius: BlastRadiusResult | null;
   blastOverlayActive: boolean;
+  isolateSubgraph?: boolean;
+  onToggleIsolateSubgraph?: () => void;
+  causalChainEdgeKeys?: ReadonlySet<string>;
+  cycleEdgeKeys?: ReadonlySet<string>;
   snapshotDiff?: SnapshotDiffResponse | null;
   driftOverlayActive?: boolean;
   searchQuery: string;
@@ -46,6 +51,10 @@ function CanvasInner({
   onSelectNode,
   blastRadius,
   blastOverlayActive,
+  isolateSubgraph = false,
+  onToggleIsolateSubgraph,
+  causalChainEdgeKeys,
+  cycleEdgeKeys,
   snapshotDiff = null,
   driftOverlayActive = false,
   searchQuery,
@@ -53,12 +62,8 @@ function CanvasInner({
   focusTrigger,
 }: ArchitectureCanvasProps): React.JSX.Element {
   const [direction, setDirection] = useState<LayoutDirection>("LR");
+  const [hideTests, setHideTests] = useState<boolean>(false);
   const { fitView } = useReactFlow();
-
-  const layoutPositions = useMemo(
-    () => computeDagreLayout(graph, direction),
-    [graph, direction]
-  );
 
   const normalizedQuery = searchQuery.trim().toLowerCase();
   const focusedPathSet = useMemo(() => new Set(focusedPaths), [focusedPaths]);
@@ -72,6 +77,56 @@ function CanvasInner({
       ...blastRadius.hop_3,
     ]);
   }, [blastOverlayActive, blastRadius]);
+
+  const testNodeCount = useMemo(
+    () => graph.nodes.filter((n) => n.is_test || isTestFilePath(n.path)).length,
+    [graph.nodes]
+  );
+
+  const canIsolate =
+    (blastOverlayActive && impactedSet.size > 0) || focusedPathSet.size >= 2;
+  const effectiveIsolate = isolateSubgraph && canIsolate;
+
+  const displayGraph: GraphResponse = useMemo(() => {
+    let allowedPaths: Set<string> | null = null;
+    if (effectiveIsolate) {
+      allowedPaths =
+        blastOverlayActive && impactedSet.size > 0 ? impactedSet : focusedPathSet;
+    }
+
+    const filteredNodes = graph.nodes.filter((node) => {
+      if (allowedPaths && !allowedPaths.has(node.path)) {
+        return false;
+      }
+      if (!effectiveIsolate && hideTests && (node.is_test || isTestFilePath(node.path))) {
+        return false;
+      }
+      return true;
+    });
+
+    const nodeIdSet = new Set(filteredNodes.map((n) => n.id));
+    const filteredEdges = graph.edges.filter(
+      (edge) => nodeIdSet.has(edge.source_node_id) && nodeIdSet.has(edge.target_node_id)
+    );
+
+    return {
+      ...graph,
+      nodes: filteredNodes,
+      edges: filteredEdges,
+    };
+  }, [
+    graph,
+    effectiveIsolate,
+    blastOverlayActive,
+    impactedSet,
+    focusedPathSet,
+    hideTests,
+  ]);
+
+  const layoutPositions = useMemo(
+    () => computeDagreLayout(displayGraph, direction),
+    [displayGraph, direction]
+  );
 
   const isDriftHighlight = driftOverlayActive && snapshotDiff !== null && !blastOverlayActive;
 
@@ -101,7 +156,7 @@ function CanvasInner({
   }, [isDriftHighlight, snapshotDiff]);
 
   const flowNodes: FileFlowNode[] = useMemo(() => {
-    return graph.nodes.map((node) => {
+    return displayGraph.nodes.map((node) => {
       const pos = layoutPositions.get(node.id) ?? { x: 0, y: 0 };
       const blastTier = classifyBlastTier(node.path, blastRadius, blastOverlayActive);
       const inDegreeDelta = deltaByPath.get(node.path) ?? 0;
@@ -139,7 +194,7 @@ function CanvasInner({
       };
     });
   }, [
-    graph.nodes,
+    displayGraph.nodes,
     layoutPositions,
     blastRadius,
     blastOverlayActive,
@@ -153,7 +208,11 @@ function CanvasInner({
   ]);
 
   const flowEdges: Edge[] = useMemo(() => {
-    const baseEdges: Edge[] = graph.edges.map((edge) => {
+    const baseEdges: Edge[] = displayGraph.edges.map((edge) => {
+      const pairKey = `${edge.source_path}=>${edge.target_path}`;
+      const isCausalChain = Boolean(causalChainEdgeKeys?.has(pairKey));
+      const isCycleEdge = Boolean(cycleEdgeKeys?.has(pairKey));
+
       const edgeImpacted =
         blastOverlayActive &&
         impactedSet.has(edge.source_path) &&
@@ -166,45 +225,61 @@ function CanvasInner({
         isDriftHighlight &&
         addedEdgeKeys.has(`${edge.source_path}=>${edge.target_path}::${edge.edge_type}`);
 
-      const strokeColor = edgeImpacted
-        ? isDirectTarget
-          ? "#F59E0B"
-          : "#EF4444"
-        : isAddedDriftEdge
-          ? "#10B981"
-          : "#475569";
+      const strokeColor = isCausalChain
+        ? "#38BDF8"
+        : isCycleEdge
+          ? "#A855F7"
+          : edgeImpacted
+            ? isDirectTarget
+              ? "#F59E0B"
+              : "#EF4444"
+            : isAddedDriftEdge
+              ? "#10B981"
+              : "#475569";
 
-      const opacity = blastOverlayActive
-        ? edgeImpacted
-          ? 0.95
-          : 0.14
-        : isDriftHighlight
-          ? isAddedDriftEdge
+      const isHighlightedSpecial = isCausalChain || isCycleEdge;
+      const opacity = isHighlightedSpecial
+        ? 1
+        : blastOverlayActive
+          ? edgeImpacted
             ? 0.95
-            : 0.22
-          : 0.65;
+            : 0.14
+          : isDriftHighlight
+            ? isAddedDriftEdge
+              ? 0.95
+              : 0.22
+            : 0.65;
 
       return {
         id: edge.id,
         source: edge.source_node_id,
         target: edge.target_node_id,
-        animated: edgeImpacted || isAddedDriftEdge,
+        animated: isHighlightedSpecial || edgeImpacted || isAddedDriftEdge,
         label:
           edge.imported_symbols.length > 0
-            ? edge.imported_symbols.slice(0, 2).join(", ")
+            ? edge.imported_symbols
+                .slice(0, effectiveIsolate || isHighlightedSpecial ? 3 : 2)
+                .join(", ")
             : undefined,
         labelStyle: {
-          fill: edgeImpacted || isAddedDriftEdge ? "#f8fafc" : "#94a3b8",
+          fill:
+            isHighlightedSpecial || edgeImpacted || isAddedDriftEdge
+              ? "#f8fafc"
+              : "#94a3b8",
           fontSize: 10,
           fontFamily: "monospace",
         },
         labelBgStyle: {
           fill: "#0f172a",
-          fillOpacity: 0.85,
+          fillOpacity: 0.88,
         },
         style: {
           stroke: strokeColor,
-          strokeWidth: edgeImpacted || isAddedDriftEdge ? 2.2 : 1.3,
+          strokeWidth: isHighlightedSpecial
+            ? 3
+            : edgeImpacted || isAddedDriftEdge
+              ? 2.2
+              : 1.3,
           opacity,
         },
         markerEnd: {
@@ -217,7 +292,7 @@ function CanvasInner({
     });
 
     if (isDriftHighlight && snapshotDiff) {
-      const nodeIdByPath = new Map(graph.nodes.map((n) => [n.path, n.id]));
+      const nodeIdByPath = new Map(displayGraph.nodes.map((n) => [n.path, n.id]));
       for (const removed of snapshotDiff.removed_edges) {
         const srcId = nodeIdByPath.get(removed.source_path);
         const dstId = nodeIdByPath.get(removed.target_path);
@@ -255,30 +330,33 @@ function CanvasInner({
 
     return baseEdges;
   }, [
-    graph.edges,
-    graph.nodes,
+    displayGraph.edges,
+    displayGraph.nodes,
+    causalChainEdgeKeys,
+    cycleEdgeKeys,
     blastOverlayActive,
     impactedSet,
     blastRadius,
     isDriftHighlight,
     addedEdgeKeys,
     snapshotDiff,
+    effectiveIsolate,
   ]);
 
   useEffect(() => {
     if (focusTrigger === 0 || focusedPaths.length === 0) return;
-    const targetIds = graph.nodes
+    const targetIds = displayGraph.nodes
       .filter((n) => focusedPathSet.has(n.path))
       .map((n) => ({ id: n.id }));
 
     if (targetIds.length > 0) {
       void fitView({ nodes: targetIds, duration: 450, padding: 0.35 });
     }
-  }, [focusTrigger, focusedPaths.length, focusedPathSet, graph.nodes, fitView]);
+  }, [focusTrigger, focusedPaths.length, focusedPathSet, displayGraph.nodes, fitView]);
 
   useEffect(() => {
     void fitView({ duration: 300, padding: 0.18 });
-  }, [graph.snapshot_id, direction, fitView]);
+  }, [graph.snapshot_id, direction, effectiveIsolate, hideTests, fitView]);
 
   return (
     <div className="relative h-full w-full overflow-hidden rounded-xl border border-border bg-slate-950">
@@ -315,7 +393,7 @@ function CanvasInner({
       </ReactFlow>
 
       <div className="pointer-events-none absolute left-3 top-3 flex flex-wrap items-center gap-2">
-        <div className="pointer-events-auto flex items-center gap-1.5 rounded-lg border border-border bg-slate-900/90 px-2.5 py-1.5 backdrop-blur">
+        <div className="pointer-events-auto flex flex-wrap items-center gap-1.5 rounded-lg border border-border bg-slate-900/90 px-2.5 py-1.5 backdrop-blur">
           <Button
             size="sm"
             variant="outline"
@@ -343,6 +421,33 @@ function CanvasInner({
             <Maximize2 className="h-3.5 w-3.5" />
             Fit
           </Button>
+
+          {canIsolate && onToggleIsolateSubgraph && (
+            <Button
+              size="sm"
+              variant={effectiveIsolate ? "default" : "outline"}
+              className="h-7 px-2.5 text-xs"
+              onClick={onToggleIsolateSubgraph}
+              title="Hide untouched background files and re-layout only the active impact subgraph"
+            >
+              <Filter className="h-3.5 w-3.5" />
+              {effectiveIsolate
+                ? `Isolated (${displayGraph.nodes.length}/${graph.nodes.length})`
+                : "Isolate Subgraph"}
+            </Button>
+          )}
+
+          {!effectiveIsolate && testNodeCount > 0 && (
+            <Button
+              size="sm"
+              variant={hideTests ? "secondary" : "outline"}
+              className="h-7 px-2 text-xs"
+              onClick={() => setHideTests((prev) => !prev)}
+            >
+              <FlaskConical className="h-3.5 w-3.5 text-emerald-400" />
+              {hideTests ? `Show Tests (${testNodeCount})` : `Hide Tests (${testNodeCount})`}
+            </Button>
+          )}
         </div>
 
         {blastOverlayActive && blastRadius && (
@@ -359,6 +464,12 @@ function CanvasInner({
               <span className="h-2.5 w-2.5 rounded-full bg-[#FCA5A5]" />
               2-3 Hop ({blastRadius.hop_2.length + blastRadius.hop_3.length})
             </span>
+            {causalChainEdgeKeys && causalChainEdgeKeys.size > 0 && (
+              <span className="flex items-center gap-1.5 text-sky-300">
+                <span className="h-2.5 w-2.5 rounded-full bg-[#38BDF8]" />
+                Causal Trace ({causalChainEdgeKeys.size} hop{causalChainEdgeKeys.size === 1 ? "" : "s"})
+              </span>
+            )}
           </div>
         )}
 

@@ -49,6 +49,7 @@ class ImpactedEdgeDetail(BaseModel):
     edge_type: str
     imported_symbols: list[str]
     symbol_match: bool
+    impact_tier: Literal["hard", "co_located"] = "hard"
 
 
 class BlastRadiusResult(BaseModel):
@@ -64,6 +65,11 @@ class BlastRadiusResult(BaseModel):
     sensitive_boundaries_touched: list[str]
     symbol_matched_files: list[str]
     impacted_edges: list[ImpactedEdgeDetail]
+    co_located_files: list[str] = Field(default_factory=list)
+    impacted_test_files: list[str] = Field(default_factory=list)
+    uncovered_files: list[str] = Field(default_factory=list)
+    candidate_doc_files: list[str] = Field(default_factory=list)
+    suggested_test_command: str | None = None
 
 
 class CitationValidationTelemetry(BaseModel):

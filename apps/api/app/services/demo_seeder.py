@@ -16,7 +16,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.db.base import Base
 from app.db.session import create_db_engine, create_session_factory
-from app.models.entities import DependencyEdge, FileNode, GraphSnapshot, PRAnalysis, Repository
+from app.models.entities import (
+    DependencyEdge,
+    FileNode,
+    GraphSnapshot,
+    PRAnalysis,
+    Repository,
+    SnapshotDocument,
+)
 from app.schemas.analysis import BlastRadiusReport, DocDriftAlert, ImpactedFlow
 from app.services.blast_radius import BlastRadiusCalculator, EdgeSnapshot, NodeSnapshot
 from app.services.citation_validator import validate_report_citations
@@ -30,6 +37,33 @@ DEMO_FULFILLMENT_REPO_ID = UUID("00000000-0000-0000-0000-000000000051")
 DEMO_FULFILLMENT_SNAPSHOT_ID = UUID("00000000-0000-0000-0000-000000000201")
 
 _DEMO_NAMESPACE = UUID("8b8b1a24-0f32-4e77-9e6a-0f1b9c6e4d12")
+_DEMO_DOCS_BY_REPO_ID: dict[UUID, dict[str, str]] = {
+    DEMO_BILLING_REPO_ID: {
+        "README.md": (
+            "# SaaS Billing Platform\n\n"
+            "## Environment Variables\n"
+            "- `JWT_SECRET` — HMAC secret used by `verifyToken` in `src/lib/token.ts`.\n"
+            "- `STRIPE_WEBHOOK_SECRET` — Signature key for `src/api/webhooks/stripe.ts`.\n\n"
+            "## Authentication\n"
+            "All protected API routes call `requireAuth` (`src/middleware/auth.ts`), which "
+            "validates `Authorization: Bearer <token>` via `verifyToken(token)`.\n"
+        ),
+        "docs/ARCHITECTURE.md": (
+            "# Billing Architecture\n\n"
+            "## API Routes & Webhooks\n"
+            "- `POST /api/checkout` (`src/api/routes/checkout.ts`) -> `chargeSubscription`.\n"
+            "- `POST /api/webhooks/stripe` (`src/api/webhooks/stripe.ts`) -> signature check.\n"
+        ),
+    },
+    DEMO_FULFILLMENT_REPO_ID: {
+        "README.md": (
+            "# Order Fulfillment API\n\n"
+            "## Environment Variables\n"
+            "- `DATABASE_URL` — PostgreSQL connection string in `app/config.py`.\n"
+            "- `FULFILLMENT_API_KEY` — Service token checked by `app/auth/guard.py`.\n"
+        ),
+    },
+}
 _BASE_TS = datetime(2026, 11, 26, 8, 30, tzinfo=UTC)
 
 
@@ -1148,6 +1182,23 @@ async def seed_demo_data(session: AsyncSession) -> DemoSeedSummary:
                             target_node_id=node_id_by_path[edge_spec.target_path],
                             edge_type=edge_spec.edge_type,
                             imported_symbols=list(edge_spec.imported_symbols),
+                        )
+                    )
+            for doc_path, doc_content in _DEMO_DOCS_BY_REPO_ID.get(spec.repo_id, {}).items():
+                existing_doc = await session.execute(
+                    select(SnapshotDocument).where(
+                        SnapshotDocument.snapshot_id == snapshot.id,
+                        SnapshotDocument.path == doc_path,
+                    )
+                )
+                if existing_doc.scalar_one_or_none() is None:
+                    doc_id = uuid5(_DEMO_NAMESPACE, f"{snap_spec.snapshot_id}:doc:{doc_path}")
+                    session.add(
+                        SnapshotDocument(
+                            id=doc_id,
+                            snapshot_id=snapshot.id,
+                            path=doc_path,
+                            content=doc_content,
                         )
                     )
             latest_snapshot_id = snapshot.id

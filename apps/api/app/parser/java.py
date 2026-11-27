@@ -146,6 +146,8 @@ class JavaAdapter(LanguageAdapter):
                 name=type_name,
                 kind=kind,
                 signature=_clean_signature(node),
+                start_line=node.start_point[0] + 1,
+                end_line=node.end_point[0] + 1,
             )
         )
 
@@ -177,6 +179,8 @@ class JavaAdapter(LanguageAdapter):
                         name=m_name,
                         kind="method",
                         signature=_clean_signature(member),
+                        start_line=member.start_point[0] + 1,
+                        end_line=member.end_point[0] + 1,
                     )
                 )
 

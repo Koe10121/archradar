@@ -6,6 +6,7 @@ from app.models.entities import (
     GraphSnapshot,
     PRAnalysis,
     Repository,
+    SnapshotDocument,
 )
 
 __all__ = [
@@ -14,4 +15,5 @@ __all__ = [
     "GraphSnapshot",
     "PRAnalysis",
     "Repository",
+    "SnapshotDocument",
 ]
