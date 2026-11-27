@@ -23,7 +23,15 @@ from app.schemas.analysis import (
     PRCommentResponse,
     VerifyGeminiKeyResponse,
 )
-from app.services.ai_analyzer import AIAnalyzer, GeminiLLMProvider, LLMProvider
+from app.services.ai_analyzer import (
+    AIAnalyzer,
+    GeminiLLMProvider,
+    GeminiProviderError,
+    LLMProvider,
+    fetch_available_gemini_models,
+    sanitize_provider_error,
+    select_candidate_flash_models,
+)
 from app.services.blast_radius import BlastRadiusCalculator, EdgeSnapshot, NodeSnapshot
 from app.services.citation_validator import validate_report_citations
 from app.services.github import fetch_github_pr_diff, parse_unified_diff
@@ -49,15 +57,16 @@ def _extract_byok_gemini_key(request: Request) -> str:
     return raw
 
 
-async def verify_gemini_key_with_google(api_key: str, model: str) -> bool:
-    """Verify a user-supplied Gemini API key via models list endpoint (0 generation tokens)."""
-    del model
-    async with httpx.AsyncClient(timeout=6.0) as client:
-        resp = await client.get(
-            "https://generativelanguage.googleapis.com/v1beta/models",
-            headers={"x-goog-api-key": api_key},
-        )
-    return resp.status_code == 200
+async def verify_gemini_key_with_google(
+    api_key: str, model: str
+) -> tuple[bool, str, str | None]:
+    """Verify a user-supplied Gemini API key and pick the best available Flash model."""
+    status_code, available_models, safe_error = await fetch_available_gemini_models(api_key)
+    if status_code == 200:
+        candidates = select_candidate_flash_models(model, available_models, limit=3)
+        resolved_model = candidates[0] if candidates else model
+        return True, resolved_model, None
+    return False, model, safe_error
 
 
 @router.post("/ai/verify-key", response_model=VerifyGeminiKeyResponse)
@@ -74,7 +83,9 @@ async def verify_gemini_key(request: Request) -> VerifyGeminiKeyResponse:
         )
 
     try:
-        is_valid = await verify_gemini_key_with_google(api_key, settings.gemini_model)
+        is_valid, resolved_model, safe_error = await verify_gemini_key_with_google(
+            api_key, settings.gemini_model
+        )
     except httpx.HTTPError as exc:
         logger.warning("Gemini key verification upstream error: %s", type(exc).__name__)
         raise HTTPException(
@@ -83,12 +94,17 @@ async def verify_gemini_key(request: Request) -> VerifyGeminiKeyResponse:
         ) from exc
 
     if not is_valid:
+        detail = (
+            f"Invalid or unauthorized Gemini API key: {safe_error}"
+            if safe_error
+            else "Invalid or unauthorized Gemini API key."
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or unauthorized Gemini API key.",
+            detail=detail,
         )
 
-    return VerifyGeminiKeyResponse(valid=True, model=settings.gemini_model)
+    return VerifyGeminiKeyResponse(valid=True, model=resolved_model)
 
 
 @router.post(
@@ -222,11 +238,16 @@ async def analyze_pull_request(
                 getattr(request.app.state, "llm_provider", None),
             )
             effective_api_key = byok_key or settings.gemini_api_key
+            created_provider: GeminiLLMProvider | None = None
             try:
-                provider = injected_provider or GeminiLLMProvider(
-                    api_key=effective_api_key,
-                    model=settings.gemini_model,
-                )
+                if injected_provider is not None:
+                    provider: LLMProvider = injected_provider
+                else:
+                    created_provider = GeminiLLMProvider(
+                        api_key=effective_api_key,
+                        model=settings.gemini_model,
+                    )
+                    provider = created_provider
             except RuntimeError as exc:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -248,20 +269,41 @@ async def analyze_pull_request(
                     doc_context=payload.doc_context or None,
                     raw_diff=raw_diff,
                 )
+            except GeminiProviderError as exc:
+                logger.warning(
+                    "Gemini API request failed (status=%s, provider_status=%s, model=%s)",
+                    exc.status_code,
+                    exc.provider_status,
+                    exc.model,
+                )
+                if exc.status_code == 429:
+                    http_status = status.HTTP_429_TOO_MANY_REQUESTS
+                elif exc.status_code in {401, 403}:
+                    http_status = status.HTTP_401_UNAUTHORIZED
+                elif exc.status_code == 504:
+                    http_status = status.HTTP_504_GATEWAY_TIMEOUT
+                else:
+                    http_status = status.HTTP_502_BAD_GATEWAY
+                raise HTTPException(status_code=http_status, detail=exc.safe_detail) from exc
             except ValueError as exc:
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail=str(exc),
+                    detail=sanitize_provider_error(str(exc)),
                 ) from exc
             except Exception as exc:
-                logger.warning("Gemini API request failed: %s", type(exc).__name__)
+                safe_err = sanitize_provider_error(str(exc))
+                logger.warning(
+                    "Unexpected AI analysis failure (%s): %s",
+                    type(exc).__name__,
+                    safe_err,
+                )
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail=(
-                        "Gemini API rejected the request (invalid API key or free-tier quota "
-                        "exceeded). Check your key in AI Key Settings or disable AI mode."
-                    ),
+                    detail=f"Gemini analysis failed ({type(exc).__name__}): {safe_err}",
                 ) from exc
+            finally:
+                if created_provider is not None:
+                    await created_provider.aclose()
 
             ai_report = ai_result.report
             citation_telemetry = ai_result.citation_telemetry

@@ -2,13 +2,15 @@
 
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Protocol
+from typing import Any, Protocol
 
+import httpx
 from google import genai
-from google.genai import types
+from google.genai import errors, types
 from pydantic import ValidationError
 
 from app.schemas.analysis import (
@@ -59,30 +61,287 @@ class LLMProvider(Protocol):
         """Generate structured JSON text adhering to response_schema."""
 
 
+_API_KEY_URL_RE = re.compile(r"AIza[0-9A-Za-z_-]{10,}")
+_KV_SECRET_RE = re.compile(
+    r"(?i)(api[_-]?key|x-goog-api-key|key)\s*[:=]\s*['\"]?([^\s'\",}&]+)['\"]?"
+)
+_GEMINI_VERSION_RE = re.compile(r"gemini-(\d+)(?:\.(\d+))?")
+_EXCLUDED_MODEL_KEYWORDS = (
+    "embedding",
+    "imagen",
+    "veo",
+    "tts",
+    "audio",
+    "image",
+    "robotics",
+    "computer-use",
+    "deep-research",
+    "aqa",
+    "learnlm",
+)
+_SCHEMA_ERROR_KEYWORDS = (
+    "schema",
+    "minimum",
+    "maximum",
+    "propertyordering",
+    "response_schema",
+)
+_DEFAULT_FALLBACK_MODELS = ("gemini-2.5-flash-lite", "gemini-2.0-flash")
+
+
+def sanitize_provider_error(message: str) -> str:
+    """Redact API keys and collapse whitespace in upstream provider error strings."""
+    redacted = _API_KEY_URL_RE.sub("[REDACTED_KEY]", message)
+    redacted = _KV_SECRET_RE.sub(r"\1=[REDACTED]", redacted)
+    collapsed = re.sub(r"\s+", " ", redacted).strip()
+    if len(collapsed) > 240:
+        return collapsed[:237] + "..."
+    return collapsed
+
+
+class GeminiProviderError(RuntimeError):
+    """Structured, secret-sanitized error raised when Gemini generation fails."""
+
+    def __init__(
+        self,
+        *,
+        status_code: int | None,
+        provider_status: str | None,
+        model: str,
+        safe_detail: str,
+    ) -> None:
+        self.status_code = status_code
+        self.provider_status = provider_status
+        self.model = model
+        self.safe_detail = safe_detail
+        super().__init__(safe_detail)
+
+
+async def fetch_available_gemini_models(
+    api_key: str,
+    *,
+    timeout: float = 6.0,
+) -> tuple[int, list[str], str | None]:
+    """Fetch generateContent-capable Gemini models for an API key (0 generation tokens)."""
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.get(
+            "https://generativelanguage.googleapis.com/v1beta/models",
+            headers={"x-goog-api-key": api_key},
+        )
+
+    if resp.status_code != 200:
+        safe_msg: str | None = None
+        try:
+            payload: Any = resp.json()
+            if isinstance(payload, dict):
+                error_obj = payload.get("error")
+                if isinstance(error_obj, dict) and isinstance(error_obj.get("message"), str):
+                    safe_msg = sanitize_provider_error(error_obj["message"])
+        except ValueError:
+            safe_msg = sanitize_provider_error(resp.text) if resp.text else None
+        return resp.status_code, [], safe_msg
+
+    model_ids: list[str] = []
+    try:
+        data: Any = resp.json()
+    except ValueError:
+        return 200, [], None
+
+    raw_models = data.get("models", []) if isinstance(data, dict) else []
+    if isinstance(raw_models, list):
+        for item in raw_models:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name")
+            methods = item.get("supportedGenerationMethods")
+            if not isinstance(name, str):
+                continue
+            if isinstance(methods, list) and "generateContent" not in methods:
+                continue
+            model_id = name.removeprefix("models/").strip()
+            if model_id:
+                model_ids.append(model_id)
+    return 200, model_ids, None
+
+
+def _is_excluded_model(model_id: str) -> bool:
+    lower = model_id.lower()
+    return any(keyword in lower for keyword in _EXCLUDED_MODEL_KEYWORDS)
+
+
+def _model_rank_key(model_id: str) -> tuple[int, int, int, int, str]:
+    lower = model_id.lower()
+    is_preview = 1 if ("preview" in lower or "exp" in lower) else 0
+    is_lite = 1 if "lite" in lower else 0
+    match = _GEMINI_VERSION_RE.search(lower)
+    if match:
+        major = int(match.group(1))
+        minor = int(match.group(2) or 0)
+    else:
+        major, minor = 0, 0
+    return (is_preview, is_lite, -major, -minor, lower)
+
+
+def select_candidate_flash_models(
+    preferred_model: str,
+    available_models: list[str] | None = None,
+    *,
+    limit: int = 3,
+) -> list[str]:
+    """Select an ordered list of text Flash candidate models without duplicates."""
+    ordered: list[str] = []
+
+    def _add(candidate: str) -> None:
+        if candidate and candidate not in ordered:
+            ordered.append(candidate)
+
+    if available_models is None:
+        _add(preferred_model)
+        for fallback in _DEFAULT_FALLBACK_MODELS:
+            _add(fallback)
+        return ordered[:limit]
+
+    eligible = [m for m in available_models if not _is_excluded_model(m)]
+    if preferred_model in eligible:
+        _add(preferred_model)
+
+    flash_candidates = [
+        m
+        for m in eligible
+        if "flash" in m.lower()
+        and "thinking" not in m.lower()
+        and "live" not in m.lower()
+    ]
+    for candidate in sorted(flash_candidates, key=_model_rank_key):
+        _add(candidate)
+
+    if not ordered:
+        gemini_candidates = [m for m in eligible if m.lower().startswith("gemini-")]
+        for candidate in sorted(gemini_candidates, key=_model_rank_key):
+            _add(candidate)
+
+    if not ordered and preferred_model:
+        _add(preferred_model)
+
+    return ordered[:limit]
+
+
 class GeminiLLMProvider:
     """Google Gemini API provider using native structured JSON output."""
 
-    def __init__(self, api_key: str, model: str = "gemini-2.5-flash") -> None:
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "gemini-2.5-flash",
+        *,
+        candidate_models: list[str] | None = None,
+    ) -> None:
         if not api_key.strip():
             raise RuntimeError("GEMINI_API_KEY is not configured.")
-        self._client = genai.Client(api_key=api_key)
+        self._api_key = api_key.strip()
         self._model = model
+        self._candidate_models = candidate_models
+        self._client = genai.Client(
+            api_key=self._api_key,
+            http_options=types.HttpOptions(timeout=25_000),
+        )
 
-    async def generate_structured(
+    async def aclose(self) -> None:
+        """Close underlying async HTTP resources when supported by google-genai."""
+        aclose_fn = getattr(self._client.aio, "aclose", None)
+        if callable(aclose_fn):
+            try:
+                await aclose_fn()
+            except Exception as exc:
+                logger.debug("Ignoring Gemini client close error: %s", type(exc).__name__)
+
+    def _format_api_error(
         self,
+        exc: errors.APIError,
+        *,
+        tried_models: list[str],
+    ) -> GeminiProviderError:
+        code = getattr(exc, "code", None)
+        provider_status = getattr(exc, "status", None)
+        raw_message = getattr(exc, "message", None) or str(exc)
+        safe_msg = sanitize_provider_error(raw_message)
+        last_model = tried_models[-1] if tried_models else self._model
+        models_label = ", ".join(tried_models) if tried_models else self._model
+
+        if code in {401, 403} or (
+            code == 400 and ("api key" in safe_msg.lower() or "key" in safe_msg.lower())
+        ):
+            return GeminiProviderError(
+                status_code=401,
+                provider_status=provider_status,
+                model=last_model,
+                safe_detail=(
+                    f"Gemini API key rejected (HTTP {code}): {safe_msg}. "
+                    "Check your key in AI Key Settings or disable AI mode."
+                ),
+            )
+        if code == 404:
+            return GeminiProviderError(
+                status_code=404,
+                provider_status=provider_status,
+                model=last_model,
+                safe_detail=(
+                    f"Gemini model unavailable (HTTP 404; tried {models_label}): {safe_msg}. "
+                    "Disable AI mode or try again later."
+                ),
+            )
+        if code == 429:
+            return GeminiProviderError(
+                status_code=429,
+                provider_status=provider_status,
+                model=last_model,
+                safe_detail=(
+                    f"Gemini free-tier quota or rate limit exceeded (HTTP 429; tried "
+                    f"{models_label}): {safe_msg}. Wait ~60s, check Google AI Studio quota, "
+                    "or disable AI mode."
+                ),
+            )
+        if code in {500, 503}:
+            return GeminiProviderError(
+                status_code=503,
+                provider_status=provider_status,
+                model=last_model,
+                safe_detail=(
+                    f"Gemini API is temporarily overloaded (HTTP {code}): {safe_msg}. "
+                    "Please retry shortly or disable AI mode."
+                ),
+            )
+
+        effective_code = code if isinstance(code, int) and code >= 400 else 502
+        return GeminiProviderError(
+            status_code=effective_code,
+            provider_status=provider_status,
+            model=last_model,
+            safe_detail=(
+                f"Gemini API error (HTTP {effective_code} {provider_status or 'ERROR'}): {safe_msg}"
+            ),
+        )
+
+    async def _call_model(
+        self,
+        *,
+        model: str,
         system_prompt: str,
         user_prompt: str,
-        response_schema: type[BlastRadiusReport],
+        response_schema: type[BlastRadiusReport] | None,
     ) -> LLMGenerationResult:
+        config_kwargs: dict[str, Any] = {
+            "system_instruction": system_prompt,
+            "response_mime_type": "application/json",
+            "temperature": 0.1,
+        }
+        if response_schema is not None:
+            config_kwargs["response_schema"] = response_schema
+
         response = await self._client.aio.models.generate_content(
-            model=self._model,
+            model=model,
             contents=user_prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                response_mime_type="application/json",
-                response_schema=response_schema,
-                temperature=0.1,
-            ),
+            config=types.GenerateContentConfig(**config_kwargs),
         )
         raw_text = response.text or ""
         usage = response.usage_metadata
@@ -90,10 +349,99 @@ class GeminiLLMProvider:
         completion_tokens = int(getattr(usage, "candidates_token_count", 0) or 0)
         return LLMGenerationResult(
             raw_text=raw_text,
-            model_used=self._model,
+            model_used=model,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
         )
+
+    async def generate_structured(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        response_schema: type[BlastRadiusReport],
+    ) -> LLMGenerationResult:
+        candidates = (
+            list(self._candidate_models) if self._candidate_models else [self._model]
+        )
+        discovered_fallbacks = False
+        tried_models: list[str] = []
+        last_api_error: errors.APIError | None = None
+
+        idx = 0
+        while idx < len(candidates):
+            current_model = candidates[idx]
+            idx += 1
+            tried_models.append(current_model)
+
+            try:
+                return await self._call_model(
+                    model=current_model,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    response_schema=response_schema,
+                )
+            except errors.APIError as exc:
+                err_msg_lower = (getattr(exc, "message", None) or "").lower()
+                if getattr(exc, "code", None) == 400 and any(
+                    keyword in err_msg_lower for keyword in _SCHEMA_ERROR_KEYWORDS
+                ):
+                    schema_json = json.dumps(response_schema.model_json_schema())
+                    fallback_instruction = (
+                        f"{system_prompt}\n\n"
+                        f"Return strictly valid JSON matching this JSON Schema:\n{schema_json}"
+                    )
+                    try:
+                        return await self._call_model(
+                            model=current_model,
+                            system_prompt=fallback_instruction,
+                            user_prompt=user_prompt,
+                            response_schema=None,
+                        )
+                    except errors.APIError as retry_exc:
+                        exc = retry_exc
+
+                last_api_error = exc
+                err_code = getattr(exc, "code", None)
+                if err_code in {404, 429, 503}:
+                    logger.warning(
+                        "Gemini model %s returned HTTP %s (%s); evaluating fallback models",
+                        current_model,
+                        err_code,
+                        getattr(exc, "status", None) or "ERROR",
+                    )
+                    if not discovered_fallbacks and self._candidate_models is None:
+                        discovered_fallbacks = True
+                        available: list[str] | None = None
+                        try:
+                            status_code, discovered, _ = await fetch_available_gemini_models(
+                                self._api_key, timeout=5.0
+                            )
+                            if status_code == 200:
+                                available = discovered
+                        except httpx.HTTPError:
+                            available = None
+
+                        for candidate in select_candidate_flash_models(
+                            self._model, available, limit=3
+                        ):
+                            if candidate not in candidates:
+                                candidates.append(candidate)
+                    continue
+
+                raise self._format_api_error(exc, tried_models=tried_models) from exc
+            except (httpx.TimeoutException, TimeoutError) as exc:
+                raise GeminiProviderError(
+                    status_code=504,
+                    provider_status="DEADLINE_EXCEEDED",
+                    model=current_model,
+                    safe_detail=(
+                        "Gemini API timed out while generating the PR risk report. "
+                        "Try a smaller diff or disable AI mode."
+                    ),
+                ) from exc
+
+        assert last_api_error is not None
+        raise self._format_api_error(last_api_error, tried_models=tried_models) from last_api_error
 
 
 def estimate_cost_usd(prompt_tokens: int, completion_tokens: int, model: str) -> Decimal:

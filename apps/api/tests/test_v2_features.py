@@ -6,13 +6,17 @@ import json
 import ssl
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 from uuid import uuid4
 
 import httpx
 import pytest
+from google.genai import errors as genai_errors
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 import app.api.routes.analyses as analyses_route
+import app.services.ai_analyzer as ai_analyzer_module
 from app.core.config import Settings
 from app.core.rate_limit import RateLimiter
 from app.db.session import create_session_factory, sanitize_asyncpg_url
@@ -26,7 +30,13 @@ from app.schemas.analysis import (
 )
 from app.schemas.repo import RepoIndexResponse, SnapshotDiffResponse
 from app.schemas.telemetry import TelemetrySummaryResponse
-from app.services.ai_analyzer import LLMGenerationResult
+from app.services.ai_analyzer import (
+    GeminiLLMProvider,
+    GeminiProviderError,
+    LLMGenerationResult,
+    sanitize_provider_error,
+    select_candidate_flash_models,
+)
 from app.services.demo_seeder import (
     DEMO_BILLING_REPO_ID,
     DEMO_BILLING_SNAPSHOT_ID,
@@ -416,9 +426,10 @@ async def test_byok_gemini_key_verify_and_per_request_analyze(
 ) -> None:
     """POST /api/ai/verify-key and X-Gemini-Api-Key header validate cleanly without persistence."""
 
-    async def _fake_verify(api_key: str, model: str) -> bool:
-        del model
-        return api_key == "AIzaSyValidTestKey1234567890"
+    async def _fake_verify(api_key: str, model: str) -> tuple[bool, str, str | None]:
+        if api_key == "AIzaSyValidTestKey1234567890":
+            return True, model, None
+        return False, model, "API key expired"
 
     monkeypatch.setattr(analyses_route, "verify_gemini_key_with_google", _fake_verify)
 
@@ -442,6 +453,7 @@ async def test_byok_gemini_key_verify_and_per_request_analyze(
             headers={"X-Gemini-Api-Key": "AIzaSyInvalidKey1234567890"},
         )
         assert invalid_resp.status_code == 401
+        assert "API key expired" in invalid_resp.json()["detail"]
 
         valid_resp = await client.post(
             "/api/ai/verify-key",
@@ -468,3 +480,234 @@ async def test_byok_gemini_key_verify_and_per_request_analyze(
             },
         )
         assert malformed_analyze.status_code == 400
+
+
+def test_sanitize_provider_error_redacts_api_keys() -> None:
+    """sanitize_provider_error strips raw AIza keys and query/header key pairs."""
+    raw = (
+        "Request failed for https://generativelanguage.googleapis.com?key=AIzaSySecretValue123456 "
+        "with x-goog-api-key: my-secret-token\n\tand extra   spaces"
+    )
+    sanitized = sanitize_provider_error(raw)
+    assert "AIzaSySecretValue123456" not in sanitized
+    assert "my-secret-token" not in sanitized
+    assert "key=[REDACTED]" in sanitized
+    assert "x-goog-api-key=[REDACTED]" in sanitized
+    assert "  " not in sanitized
+
+
+def test_select_candidate_flash_models_prioritizes_available_models() -> None:
+    """Flash model selector filters incompatible models and ranks newer stable models higher."""
+    available = [
+        "gemini-embedding-001",
+        "imagen-3.0-generate-002",
+        "gemini-2.5-flash-tts",
+        "gemini-3.8-flash-preview",
+        "gemini-3.6-flash",
+        "gemini-2.5-flash-lite",
+        "gemini-2.5-flash",
+    ]
+    selected = select_candidate_flash_models("gemini-2.5-flash", available, limit=3)
+    assert selected == ["gemini-2.5-flash", "gemini-3.6-flash", "gemini-2.5-flash-lite"]
+
+    without_preferred = select_candidate_flash_models("gemini-2.5-flash", available[0:6], limit=3)
+    assert without_preferred == [
+        "gemini-3.6-flash",
+        "gemini-2.5-flash-lite",
+        "gemini-3.8-flash-preview",
+    ]
+
+
+class _FakeAsyncModels:
+    def __init__(self, handler: Any) -> None:
+        self._handler = handler
+
+    async def generate_content(self, **kwargs: Any) -> Any:
+        return await self._handler(**kwargs)
+
+
+class _FakeGenAIClient:
+    def __init__(self, handler: Any) -> None:
+        self.aio = SimpleNamespace(models=_FakeAsyncModels(handler), aclose=None)
+
+
+async def test_gemini_provider_fallbacks_on_404_429_and_schema_400(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GeminiLLMProvider falls back cleanly across 404/schema-400/429 without leaking keys."""
+    valid_json = json.dumps(
+        {
+            "overall_risk": "low",
+            "confidence": 0.9,
+            "executive_summary": "Safe edit.",
+            "breaking_change_detected": False,
+            "impacted_flows": [],
+            "doc_drift_alerts": [],
+            "reviewer_checklist": ["Verify tests"],
+        }
+    )
+
+    async def _mock_fetch_models(
+        api_key: str, *, timeout: float = 6.0
+    ) -> tuple[int, list[str], str | None]:
+        del api_key, timeout
+        return 200, ["gemini-3.6-flash", "gemini-2.5-flash-lite"], None
+
+    monkeypatch.setattr(ai_analyzer_module, "fetch_available_gemini_models", _mock_fetch_models)
+
+    # 1. Primary 404 -> discovers available models -> succeeds on fallback model
+    seen_models_404: list[str] = []
+
+    async def _handler_404(**kwargs: Any) -> Any:
+        model = str(kwargs["model"])
+        seen_models_404.append(model)
+        if model == "gemini-2.5-flash":
+            raise genai_errors.APIError(
+                404,
+                {"error": {"code": 404, "message": "Model not found", "status": "NOT_FOUND"}},
+            )
+        return SimpleNamespace(
+            text=valid_json,
+            usage_metadata=SimpleNamespace(prompt_token_count=120, candidates_token_count=45),
+        )
+
+    provider_404 = GeminiLLMProvider(
+        api_key="AIzaSyDummyTestKey1234567890", model="gemini-2.5-flash"
+    )
+    provider_404._client = _FakeGenAIClient(_handler_404)
+    res_404 = await provider_404.generate_structured("sys", "usr", BlastRadiusReport)
+    assert res_404.model_used == "gemini-3.6-flash"
+    assert seen_models_404 == ["gemini-2.5-flash", "gemini-3.6-flash"]
+
+    # 2. Schema 400 -> retries same model without response_schema -> succeeds
+    seen_configs: list[bool] = []
+
+    async def _handler_schema_400(**kwargs: Any) -> Any:
+        config = kwargs["config"]
+        has_schema = getattr(config, "response_schema", None) is not None
+        seen_configs.append(has_schema)
+        if has_schema:
+            raise genai_errors.APIError(
+                400,
+                {
+                    "error": {
+                        "code": 400,
+                        "message": "Invalid schema minimum field",
+                        "status": "INVALID_ARGUMENT",
+                    }
+                },
+            )
+        return SimpleNamespace(
+            text=valid_json,
+            usage_metadata=SimpleNamespace(prompt_token_count=100, candidates_token_count=40),
+        )
+
+    provider_schema = GeminiLLMProvider(api_key="AIzaSyDummyTestKey1234567890")
+    provider_schema._client = _FakeGenAIClient(_handler_schema_400)
+    res_schema = await provider_schema.generate_structured("sys", "usr", BlastRadiusReport)
+    assert res_schema.model_used == "gemini-2.5-flash"
+    assert seen_configs == [True, False]
+
+    # 3. Exhausted 429 with leaked API key -> raises GeminiProviderError with redacted key
+    async def _handler_429(**kwargs: Any) -> Any:
+        del kwargs
+        raise genai_errors.APIError(
+            429,
+            {
+                "error": {
+                    "code": 429,
+                    "message": "Quota exceeded for key=AIzaSyLeakySecretKey987654",
+                    "status": "RESOURCE_EXHAUSTED",
+                }
+            },
+        )
+
+    provider_429 = GeminiLLMProvider(api_key="AIzaSyLeakySecretKey987654")
+    provider_429._client = _FakeGenAIClient(_handler_429)
+    with pytest.raises(GeminiProviderError) as exc_info:
+        await provider_429.generate_structured("sys", "usr", BlastRadiusReport)
+    assert exc_info.value.status_code == 429
+    assert "429" in exc_info.value.safe_detail
+    assert "AIzaSyLeakySecretKey987654" not in exc_info.value.safe_detail
+    assert "[REDACTED" in exc_info.value.safe_detail
+
+
+class _FailingMockLLM:
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+
+    async def generate_structured(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        response_schema: type[BlastRadiusReport],
+    ) -> LLMGenerationResult:
+        del system_prompt, user_prompt, response_schema
+        raise self._exc
+
+
+async def test_analyze_pr_surfaces_sanitized_gemini_provider_errors(
+    tmp_path: Path,
+    sqlite_engine: AsyncEngine,
+    test_settings: Settings,
+) -> None:
+    """POST /api/repos/{id}/analyze-pr maps GeminiProviderError to accurate HTTP status."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.ts").write_text("export function run(): void {}\n", encoding="utf-8")
+
+    raw_diff = (
+        "diff --git a/src/main.ts b/src/main.ts\n"
+        "--- a/src/main.ts\n+++ b/src/main.ts\n"
+        "@@ -1 +1 @@\n-export function run(): void {}\n"
+        "+export function run(x: number): void {}\n"
+    )
+
+    # 429 quota error surfaced accurately
+    app_429 = create_app(
+        settings=test_settings,
+        db_engine=sqlite_engine,
+        llm_provider=_FailingMockLLM(
+            GeminiProviderError(
+                status_code=429,
+                provider_status="RESOURCE_EXHAUSTED",
+                model="gemini-2.5-flash",
+                safe_detail="Gemini free-tier quota exceeded (HTTP 429).",
+            )
+        ),
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app_429), base_url="http://testserver"
+    ) as client:
+        idx_resp = await client.post("/api/repos/index", json={"local_path": str(tmp_path)})
+        assert idx_resp.status_code == 201
+        repo_id = RepoIndexResponse.model_validate(idx_resp.json()).repository_id
+
+        resp_429 = await client.post(
+            f"/api/repos/{repo_id}/analyze-pr",
+            json={"raw_diff": raw_diff, "run_ai": True},
+        )
+        assert resp_429.status_code == 429
+        assert "HTTP 429" in resp_429.json()["detail"]
+
+    # 401 unauthorized key error surfaced accurately
+    app_401 = create_app(
+        settings=test_settings,
+        db_engine=sqlite_engine,
+        llm_provider=_FailingMockLLM(
+            GeminiProviderError(
+                status_code=401,
+                provider_status="PERMISSION_DENIED",
+                model="gemini-2.5-flash",
+                safe_detail="Gemini API key rejected (HTTP 403): API key not valid.",
+            )
+        ),
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app_401), base_url="http://testserver"
+    ) as client:
+        resp_401 = await client.post(
+            f"/api/repos/{repo_id}/analyze-pr",
+            json={"raw_diff": raw_diff, "run_ai": True},
+        )
+        assert resp_401.status_code == 401
+        assert "API key rejected" in resp_401.json()["detail"]
