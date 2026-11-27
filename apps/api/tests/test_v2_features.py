@@ -9,9 +9,12 @@ from pathlib import Path
 from uuid import uuid4
 
 import httpx
+import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+import app.api.routes.analyses as analyses_route
 from app.core.config import Settings
+from app.core.rate_limit import RateLimiter
 from app.db.session import create_session_factory, sanitize_asyncpg_url
 from app.main import create_app
 from app.schemas.analysis import (
@@ -392,3 +395,76 @@ async def test_cloud_production_blocks_local_path_and_lazy_bootstraps(
             json={"local_path": str(tmp_path)},
         )
         assert local_resp.status_code == 403
+
+
+def test_rate_limiter_enforces_quota_and_retry_after() -> None:
+    """RateLimiter allows requests up to quota and returns retry_after when exceeded."""
+    limiter = RateLimiter(max_requests=2, window_seconds=60)
+    assert limiter.check("1.2.3.4")[0] is True
+    assert limiter.check("1.2.3.4")[0] is True
+    allowed, retry_after = limiter.check("1.2.3.4")
+    assert allowed is False
+    assert retry_after >= 1
+    assert limiter.check("5.6.7.8")[0] is True
+
+
+async def test_byok_gemini_key_verify_and_per_request_analyze(
+    tmp_path: Path,
+    sqlite_engine: AsyncEngine,
+    test_settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """POST /api/ai/verify-key and X-Gemini-Api-Key header validate cleanly without persistence."""
+
+    async def _fake_verify(api_key: str, model: str) -> bool:
+        del model
+        return api_key == "AIzaSyValidTestKey1234567890"
+
+    monkeypatch.setattr(analyses_route, "verify_gemini_key_with_google", _fake_verify)
+
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.ts").write_text("export function run(): void {}\n", encoding="utf-8")
+
+    app = create_app(settings=test_settings, db_engine=sqlite_engine)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        missing_resp = await client.post("/api/ai/verify-key")
+        assert missing_resp.status_code == 400
+
+        bad_fmt_resp = await client.post(
+            "/api/ai/verify-key",
+            headers={"X-Gemini-Api-Key": "has spaces inside"},
+        )
+        assert bad_fmt_resp.status_code == 400
+
+        invalid_resp = await client.post(
+            "/api/ai/verify-key",
+            headers={"X-Gemini-Api-Key": "AIzaSyInvalidKey1234567890"},
+        )
+        assert invalid_resp.status_code == 401
+
+        valid_resp = await client.post(
+            "/api/ai/verify-key",
+            headers={"X-Gemini-Api-Key": "AIzaSyValidTestKey1234567890"},
+        )
+        assert valid_resp.status_code == 200
+        assert valid_resp.json()["valid"] is True
+
+        idx_resp = await client.post("/api/repos/index", json={"local_path": str(tmp_path)})
+        assert idx_resp.status_code == 201
+        repo_id = RepoIndexResponse.model_validate(idx_resp.json()).repository_id
+
+        malformed_analyze = await client.post(
+            f"/api/repos/{repo_id}/analyze-pr",
+            headers={"X-Gemini-Api-Key": "bad key with spaces"},
+            json={
+                "raw_diff": (
+                    "diff --git a/src/main.ts b/src/main.ts\n"
+                    "--- a/src/main.ts\n+++ b/src/main.ts\n"
+                    "@@ -1 +1 @@\n-export function run(): void {}\n"
+                    "+export function run(x: number): void {}\n"
+                ),
+                "run_ai": True,
+            },
+        )
+        assert malformed_analyze.status_code == 400

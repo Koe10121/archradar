@@ -4,8 +4,10 @@ import {
   PRAnalysisListSchema,
   PRAnalysisResponseSchema,
   PRCommentResponseSchema,
+  VerifyGeminiKeyResponseSchema,
   type PRAnalysisResponse,
   type PRCommentResponse,
+  type VerifyGeminiKeyResponse,
 } from "@/lib/schemas/analysis";
 import { HealthResponseSchema, type HealthResponse } from "@/lib/schemas/health";
 import {
@@ -60,6 +62,7 @@ async function requestJson<T>(
     method?: "GET" | "POST";
     body?: Record<string, unknown>;
     timeoutMs?: number;
+    extraHeaders?: Record<string, string>;
   }
 ): Promise<ApiResult<T>> {
   const isServer = options?.isServer ?? false;
@@ -77,6 +80,7 @@ async function requestJson<T>(
       headers: {
         Accept: "application/json",
         ...(options?.body ? { "Content-Type": "application/json" } : {}),
+        ...(options?.extraHeaders ?? {}),
       },
       body: options?.body ? JSON.stringify(options.body) : undefined,
     });
@@ -227,6 +231,16 @@ export async function indexRepository(payload: {
   });
 }
 
+export async function verifyGeminiApiKey(
+  apiKey: string
+): Promise<ApiResult<VerifyGeminiKeyResponse>> {
+  return requestJson("/api/ai/verify-key", VerifyGeminiKeyResponseSchema, {
+    method: "POST",
+    timeoutMs: 10_000,
+    extraHeaders: { "X-Gemini-Api-Key": apiKey },
+  });
+}
+
 export async function analyzePullRequest(
   repoId: string,
   payload: {
@@ -235,8 +249,14 @@ export async function analyzePullRequest(
     pr_title?: string;
     pr_description?: string;
     run_ai?: boolean;
-  }
+  },
+  options?: { geminiApiKey?: string }
 ): Promise<ApiResult<PRAnalysisResponse>> {
+  const extraHeaders =
+    payload.run_ai && options?.geminiApiKey
+      ? { "X-Gemini-Api-Key": options.geminiApiKey }
+      : undefined;
+
   return requestJson(
     `/api/repos/${encodeURIComponent(repoId)}/analyze-pr`,
     PRAnalysisResponseSchema,
@@ -244,6 +264,7 @@ export async function analyzePullRequest(
       method: "POST",
       body: payload,
       timeoutMs: 45_000,
+      extraHeaders,
     }
   );
 }

@@ -10,6 +10,7 @@ from sqlalchemy import asc, desc, select
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.core.config import Settings
+from app.core.rate_limit import RateLimiter, enforce_rate_limit
 from app.db.session import create_session_factory
 from app.models.entities import DependencyEdge, FileNode, GraphSnapshot, Repository
 from app.schemas.repo import (
@@ -27,6 +28,7 @@ from app.services.indexer import RepoIndexer, parse_github_repo_url
 from app.services.snapshot_diff import compute_snapshot_diff
 
 router = APIRouter(prefix="/api/repos", tags=["repositories"])
+_index_limiter = RateLimiter(max_requests=12, window_seconds=60)
 
 
 @router.post("/index", response_model=RepoIndexResponse, status_code=status.HTTP_201_CREATED)
@@ -36,6 +38,7 @@ async def index_repository(
 ) -> RepoIndexResponse:
     """Index a GitHub repository URL or local directory into a dependency graph snapshot."""
     settings = cast(Settings, request.app.state.settings)
+    enforce_rate_limit(request, _index_limiter, settings)
     engine = cast(AsyncEngine, request.app.state.db_engine)
     session_factory = create_session_factory(engine)
     indexer = RepoIndexer()

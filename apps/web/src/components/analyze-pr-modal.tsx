@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { GitPullRequest, Loader2, Sparkles, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { GitPullRequest, KeyRound, Loader2, ShieldCheck, Sparkles, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { analyzePullRequest } from "@/lib/api";
@@ -9,6 +9,8 @@ import {
   SAMPLE_DIFFS_BY_REPO_ID,
   SAMPLE_UNIFIED_DIFF,
 } from "@/lib/demo-data";
+import { maskApiKey } from "@/lib/gemini-key";
+import { buildSampleDiffForGraph } from "@/lib/sample-diff";
 import { type BlastRadiusResult, type PRAnalysisResponse } from "@/lib/schemas/analysis";
 import { type GraphResponse } from "@/lib/schemas/repo";
 
@@ -19,6 +21,8 @@ interface AnalyzePRModalProps {
   isOfflineDemo: boolean;
   demoScenarios: PRAnalysisResponse[];
   graph: GraphResponse;
+  geminiApiKey: string;
+  onOpenGeminiKeyModal: () => void;
   onClose: () => void;
   onAnalyzed: (analysis: PRAnalysisResponse) => void;
 }
@@ -116,22 +120,44 @@ export function AnalyzePRModal({
   isOfflineDemo,
   demoScenarios,
   graph,
+  geminiApiKey,
+  onOpenGeminiKeyModal,
   onClose,
   onAnalyzed,
 }: AnalyzePRModalProps): React.JSX.Element | null {
-  const sampleDiffForRepo = SAMPLE_DIFFS_BY_REPO_ID[repoId] ?? SAMPLE_UNIFIED_DIFF;
+  const autoSample = useMemo(() => {
+    const presetDiff = SAMPLE_DIFFS_BY_REPO_ID[repoId];
+    if (presetDiff) {
+      return {
+        title: "Enforce strict audience claim in verifyToken",
+        diff: presetDiff,
+      };
+    }
+    const generated = buildSampleDiffForGraph(graph);
+    return {
+      title: generated.title,
+      diff: generated.diff || SAMPLE_UNIFIED_DIFF,
+    };
+  }, [repoId, graph]);
 
   const [mode, setMode] = useState<"diff" | "url">("diff");
-  const [prTitle, setPrTitle] = useState("Enforce strict audience claim in verifyToken");
+  const [prTitle, setPrTitle] = useState(autoSample.title);
   const [prUrl, setPrUrl] = useState("");
-  const [rawDiff, setRawDiff] = useState(sampleDiffForRepo);
-  const [runAi, setRunAi] = useState(false);
+  const [rawDiff, setRawDiff] = useState(autoSample.diff);
+  const [runAi, setRunAi] = useState(Boolean(geminiApiKey));
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    setRawDiff(SAMPLE_DIFFS_BY_REPO_ID[repoId] ?? SAMPLE_UNIFIED_DIFF);
-  }, [repoId]);
+    setRawDiff(autoSample.diff);
+    setPrTitle(autoSample.title);
+  }, [autoSample]);
+
+  useEffect(() => {
+    if (open && geminiApiKey) {
+      setRunAi(true);
+    }
+  }, [open, geminiApiKey]);
 
   useEffect(() => {
     if (!open) return;
@@ -149,7 +175,7 @@ export function AnalyzePRModal({
     setError(null);
 
     if (isOfflineDemo && mode === "diff") {
-      if (rawDiff.trim() === sampleDiffForRepo.trim() && demoScenarios.length > 0) {
+      if (rawDiff.trim() === autoSample.diff.trim() && demoScenarios.length > 0) {
         const primary = demoScenarios[0];
         if (primary) {
           onAnalyzed(primary);
@@ -163,12 +189,16 @@ export function AnalyzePRModal({
     }
 
     setIsSubmitting(true);
-    const result = await analyzePullRequest(repoId, {
-      pr_title: prTitle.trim() || "Ad-hoc PR Analysis",
-      raw_diff: mode === "diff" ? rawDiff : undefined,
-      pr_url: mode === "url" ? prUrl.trim() : undefined,
-      run_ai: runAi,
-    });
+    const result = await analyzePullRequest(
+      repoId,
+      {
+        pr_title: prTitle.trim() || "Ad-hoc PR Analysis",
+        raw_diff: mode === "diff" ? rawDiff : undefined,
+        pr_url: mode === "url" ? prUrl.trim() : undefined,
+        run_ai: runAi,
+      },
+      { geminiApiKey }
+    );
     setIsSubmitting(false);
 
     if (!result.ok) {
@@ -266,10 +296,13 @@ export function AnalyzePRModal({
                 </label>
                 <button
                   type="button"
-                  onClick={() => setRawDiff(sampleDiffForRepo)}
+                  onClick={() => {
+                    setRawDiff(autoSample.diff);
+                    setPrTitle(autoSample.title);
+                  }}
                   className="text-xs text-amber-400 hover:underline"
                 >
-                  Load sample diff
+                  Load sample diff for this repo
                 </button>
               </div>
               <textarea
@@ -297,15 +330,48 @@ export function AnalyzePRModal({
           )}
 
           {!isOfflineDemo && (
-            <label className="flex items-center gap-2 text-xs text-slate-300">
-              <input
-                type="checkbox"
-                checked={runAi}
-                onChange={(e) => setRunAi(e.target.checked)}
-                className="h-4 w-4 rounded border-border bg-slate-950 accent-amber-500"
-              />
-              Run Grounded Gemini AI Risk Report (requires <code className="font-mono">GEMINI_API_KEY</code> on API)
-            </label>
+            <div className="space-y-2 rounded-lg border border-border bg-slate-950/60 p-3 text-xs">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <label className="flex items-center gap-2 font-medium text-slate-200">
+                  <input
+                    type="checkbox"
+                    checked={runAi}
+                    onChange={(e) => setRunAi(e.target.checked)}
+                    className="h-4 w-4 rounded border-border bg-slate-950 accent-amber-500"
+                  />
+                  Include Grounded Gemini AI Risk &amp; Doc-Drift Report
+                </label>
+
+                {geminiApiKey ? (
+                  <button
+                    type="button"
+                    onClick={onOpenGeminiKeyModal}
+                    className="inline-flex items-center gap-1 rounded border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 font-mono text-[11px] text-emerald-300 hover:bg-emerald-500/20"
+                  >
+                    <ShieldCheck className="h-3 w-3" />
+                    Session key ready ({maskApiKey(geminiApiKey)})
+                  </button>
+                ) : (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-7 px-2.5 text-[11px]"
+                    onClick={onOpenGeminiKeyModal}
+                  >
+                    <KeyRound className="h-3 w-3 text-emerald-400" />
+                    Add Free Gemini Key
+                  </Button>
+                )}
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                {runAi
+                  ? geminiApiKey
+                    ? "Uses your session-only Gemini key over HTTPS (never stored on server)."
+                    : "Uses the server's GEMINI_API_KEY if configured, or add your own free session key above."
+                  : "Deterministic Tree-sitter AST + Reverse-BFS runs free and instantly with zero AI key."}
+              </p>
+            </div>
           )}
 
           {error && (

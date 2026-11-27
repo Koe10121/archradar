@@ -121,3 +121,10 @@ class PRCommentResponse(BaseModel):
     analysis_id: UUID
     markdown: str
     character_count: int = Field(ge=0)
+
+
+class VerifyGeminiKeyResponse(BaseModel):
+    """Response from POST /api/ai/verify-key (zero tokens consumed)."""
+
+    valid: bool
+    model: str

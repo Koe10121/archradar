@@ -1,21 +1,24 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Activity,
   BarChart3,
   FolderGit2,
   GitPullRequest,
-  History,
+  HelpCircle,
+  KeyRound,
   Layers,
   Radar,
   Search,
   Sparkles,
+  X,
 } from "lucide-react";
 
 import { AnalyzePRModal } from "@/components/analyze-pr-modal";
 import { BlastRadiusPanel } from "@/components/blast-radius-panel";
 import { DriftTimelinePanel } from "@/components/drift-timeline-panel";
+import { GeminiKeyModal } from "@/components/gemini-key-modal";
 import { ArchitectureCanvas } from "@/components/graph/architecture-canvas";
 import { IndexRepoModal } from "@/components/index-repo-modal";
 import { NodeInspectorDrawer } from "@/components/node-inspector-drawer";
@@ -41,6 +44,11 @@ import {
   DEMO_REPOSITORY,
   DEMO_SNAPSHOTS_BY_REPO_ID,
 } from "@/lib/demo-data";
+import {
+  clearSessionGeminiKey,
+  getSessionGeminiKey,
+  setSessionGeminiKey,
+} from "@/lib/gemini-key";
 import { type PRAnalysisResponse } from "@/lib/schemas/analysis";
 import {
   type GraphResponse,
@@ -113,7 +121,14 @@ export function ArchRadarWorkspace({
   const [analyzeOpen, setAnalyzeOpen] = useState(false);
   const [indexOpen, setIndexOpen] = useState(false);
   const [telemetryOpen, setTelemetryOpen] = useState(false);
+  const [keyModalOpen, setKeyModalOpen] = useState(false);
+  const [showGuide, setShowGuide] = useState(true);
+  const [geminiApiKey, setGeminiApiKey] = useState("");
   const [statusError, setStatusError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setGeminiApiKey(getSessionGeminiKey());
+  }, []);
 
   const backendRepoIds = useMemo(
     () => new Set(liveRepos.map((repo) => repo.id)),
@@ -495,6 +510,18 @@ export function ArchRadarWorkspace({
             size="sm"
             variant="outline"
             className="h-8 text-xs"
+            onClick={() => setKeyModalOpen(true)}
+            title="Configure optional session-only Gemini API key"
+          >
+            <KeyRound
+              className={`h-3.5 w-3.5 ${geminiApiKey ? "text-emerald-400" : "text-slate-400"}`}
+            />
+            {geminiApiKey ? "AI Key Set" : "Free AI Key"}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-8 text-xs"
             onClick={() => setTelemetryOpen(true)}
           >
             <BarChart3 className="h-3.5 w-3.5 text-emerald-400" />
@@ -502,21 +529,13 @@ export function ArchRadarWorkspace({
           </Button>
           <Button
             size="sm"
-            variant={activeTab === "drift" && driftOverlayActive ? "default" : "outline"}
+            variant={showGuide ? "secondary" : "outline"}
             className="h-8 text-xs"
-            onClick={() => void handleOpenDriftTab()}
+            onClick={() => setShowGuide((prev) => !prev)}
+            title="Show or hide 3-step testing guide"
           >
-            <History className="h-3.5 w-3.5 text-emerald-400" />
-            Drift Timeline
-          </Button>
-          <Button
-            size="sm"
-            variant="secondary"
-            className="h-8 text-xs"
-            onClick={() => void handleSimulateDemoPR(0)}
-          >
-            <Sparkles className="h-3.5 w-3.5 text-amber-400" />
-            Simulate PR #42
+            <HelpCircle className="h-3.5 w-3.5 text-sky-400" />
+            Guide
           </Button>
           <Button
             size="sm"
@@ -537,6 +556,72 @@ export function ArchRadarWorkspace({
           </Button>
         </div>
       </header>
+
+      {showGuide && (
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-slate-950/70 px-4 py-2 text-xs">
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-slate-300">
+            <span className="font-semibold text-amber-300">Quick Start:</span>
+            <span className="flex items-center gap-1.5">
+              <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-amber-500/20 font-mono text-[10px] font-bold text-amber-300">
+                1
+              </span>
+              Pick a repo or{" "}
+              <button
+                type="button"
+                onClick={() => setIndexOpen(true)}
+                className="font-medium text-amber-300 underline-offset-2 hover:underline"
+              >
+                Index any public GitHub repo
+              </button>{" "}
+              <span className="text-muted-foreground">(TS/JS, Py, Go, Rust, Java)</span>
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-red-500/20 font-mono text-[10px] font-bold text-red-300">
+                2
+              </span>
+              Test blast radius via{" "}
+              <button
+                type="button"
+                onClick={() => void handleSimulateDemoPR(0)}
+                className="inline-flex items-center gap-1 font-medium text-red-300 underline-offset-2 hover:underline"
+              >
+                <Sparkles className="h-3 w-3" />
+                Demo PR #42
+              </button>{" "}
+              or{" "}
+              <button
+                type="button"
+                onClick={() => setAnalyzeOpen(true)}
+                className="font-medium text-slate-100 underline-offset-2 hover:underline"
+              >
+                Analyze PR
+              </button>{" "}
+              <span className="text-muted-foreground">(auto-loads sample diff)</span>
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500/20 font-mono text-[10px] font-bold text-emerald-300">
+                3
+              </span>
+              Optional:{" "}
+              <button
+                type="button"
+                onClick={() => setKeyModalOpen(true)}
+                className="font-medium text-emerald-300 underline-offset-2 hover:underline"
+              >
+                {geminiApiKey ? "Gemini AI Key active" : "Add free session Gemini key"}
+              </button>
+            </span>
+          </div>
+          <button
+            type="button"
+            aria-label="Dismiss quick start guide"
+            onClick={() => setShowGuide(false)}
+            className="rounded p-1 text-slate-400 hover:bg-secondary hover:text-slate-200"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
 
       {statusError && (
         <div className="border-b border-red-500/30 bg-red-500/10 px-4 py-2 text-xs text-red-200">
@@ -684,6 +769,8 @@ export function ArchRadarWorkspace({
         isOfflineDemo={isOfflineDemo}
         demoScenarios={matchingDemoScenarios}
         graph={graph}
+        geminiApiKey={geminiApiKey}
+        onOpenGeminiKeyModal={() => setKeyModalOpen(true)}
         onClose={() => setAnalyzeOpen(false)}
         onAnalyzed={(analysis) => {
           setActiveAnalysis(analysis);
@@ -695,6 +782,21 @@ export function ArchRadarWorkspace({
             ...analysis.blast_radius.hop_1,
           ]);
         }}
+      />
+
+      <GeminiKeyModal
+        open={keyModalOpen}
+        currentKey={geminiApiKey}
+        apiOnline={initialHealth.ok}
+        onSaveKey={(key) => {
+          setSessionGeminiKey(key);
+          setGeminiApiKey(key);
+        }}
+        onClearKey={() => {
+          clearSessionGeminiKey();
+          setGeminiApiKey("");
+        }}
+        onClose={() => setKeyModalOpen(false)}
       />
 
       <IndexRepoModal

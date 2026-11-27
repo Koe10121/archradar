@@ -1,5 +1,6 @@
 """PR blast-radius and grounded AI analysis API endpoints."""
 
+import logging
 from decimal import Decimal
 from typing import cast
 from uuid import UUID
@@ -10,6 +11,7 @@ from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.core.config import Settings
+from app.core.rate_limit import RateLimiter, enforce_rate_limit
 from app.db.session import create_session_factory
 from app.models.entities import DependencyEdge, FileNode, GraphSnapshot, PRAnalysis, Repository
 from app.schemas.analysis import (
@@ -19,6 +21,7 @@ from app.schemas.analysis import (
     CitationValidationTelemetry,
     PRAnalysisResponse,
     PRCommentResponse,
+    VerifyGeminiKeyResponse,
 )
 from app.services.ai_analyzer import AIAnalyzer, GeminiLLMProvider, LLMProvider
 from app.services.blast_radius import BlastRadiusCalculator, EdgeSnapshot, NodeSnapshot
@@ -26,7 +29,66 @@ from app.services.citation_validator import validate_report_citations
 from app.services.github import fetch_github_pr_diff, parse_unified_diff
 from app.services.pr_commenter import build_pr_comment_response
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api", tags=["analyses"])
+_analyze_limiter = RateLimiter(max_requests=15, window_seconds=60)
+_verify_key_limiter = RateLimiter(max_requests=10, window_seconds=60)
+
+
+def _extract_byok_gemini_key(request: Request) -> str:
+    """Validate optional session-only BYOK Gemini key from X-Gemini-Api-Key header."""
+    raw = request.headers.get("X-Gemini-Api-Key", "").strip()
+    if not raw:
+        return ""
+    if len(raw) > 256 or any(ch.isspace() or ord(ch) < 32 for ch in raw):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid X-Gemini-Api-Key header format.",
+        )
+    return raw
+
+
+async def verify_gemini_key_with_google(api_key: str, model: str) -> bool:
+    """Verify a user-supplied Gemini API key via models list endpoint (0 generation tokens)."""
+    del model
+    async with httpx.AsyncClient(timeout=6.0) as client:
+        resp = await client.get(
+            "https://generativelanguage.googleapis.com/v1beta/models",
+            headers={"x-goog-api-key": api_key},
+        )
+    return resp.status_code == 200
+
+
+@router.post("/ai/verify-key", response_model=VerifyGeminiKeyResponse)
+async def verify_gemini_key(request: Request) -> VerifyGeminiKeyResponse:
+    """Verify a BYOK Gemini API key without persisting or logging the secret."""
+    settings = cast(Settings, request.app.state.settings)
+    enforce_rate_limit(request, _verify_key_limiter, settings)
+
+    api_key = _extract_byok_gemini_key(request)
+    if not api_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing X-Gemini-Api-Key header.",
+        )
+
+    try:
+        is_valid = await verify_gemini_key_with_google(api_key, settings.gemini_model)
+    except httpx.HTTPError as exc:
+        logger.warning("Gemini key verification upstream error: %s", type(exc).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Could not reach Gemini API to verify key. Please try again.",
+        ) from exc
+
+    if not is_valid:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or unauthorized Gemini API key.",
+        )
+
+    return VerifyGeminiKeyResponse(valid=True, model=settings.gemini_model)
 
 
 @router.post(
@@ -41,6 +103,8 @@ async def analyze_pull_request(
 ) -> PRAnalysisResponse:
     """Compute deterministic blast radius and optional grounded AI risk report for a PR."""
     settings = cast(Settings, request.app.state.settings)
+    enforce_rate_limit(request, _analyze_limiter, settings)
+    byok_key = _extract_byok_gemini_key(request)
     engine = cast(AsyncEngine, request.app.state.db_engine)
     session_factory = create_session_factory(engine)
 
@@ -157,15 +221,20 @@ async def analyze_pull_request(
                 LLMProvider | None,
                 getattr(request.app.state, "llm_provider", None),
             )
+            effective_api_key = byok_key or settings.gemini_api_key
             try:
                 provider = injected_provider or GeminiLLMProvider(
-                    api_key=settings.gemini_api_key,
+                    api_key=effective_api_key,
                     model=settings.gemini_model,
                 )
             except RuntimeError as exc:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"{exc} Configure GEMINI_API_KEY or set run_ai=false.",
+                    detail=(
+                        "No Gemini API key configured. Click 'AI Key' to add your free "
+                        "session-only Gemini key, or uncheck AI Risk Report to run "
+                        "deterministic-only mode."
+                    ),
                 ) from exc
 
             analyzer = AIAnalyzer(provider=provider)
@@ -183,6 +252,15 @@ async def analyze_pull_request(
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,
                     detail=str(exc),
+                ) from exc
+            except Exception as exc:
+                logger.warning("Gemini API request failed: %s", type(exc).__name__)
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=(
+                        "Gemini API rejected the request (invalid API key or free-tier quota "
+                        "exceeded). Check your key in AI Key Settings or disable AI mode."
+                    ),
                 ) from exc
 
             ai_report = ai_result.report

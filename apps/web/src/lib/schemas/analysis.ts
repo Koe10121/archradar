@@ -82,6 +82,11 @@ export const PRCommentResponseSchema = z.object({
   character_count: z.number().int().nonnegative(),
 });
 
+export const VerifyGeminiKeyResponseSchema = z.object({
+  valid: z.boolean(),
+  model: z.string(),
+});
+
 export type RiskLevel = z.infer<typeof RiskLevelSchema>;
 export type ImpactedFlow = z.infer<typeof ImpactedFlowSchema>;
 export type DocDriftAlert = z.infer<typeof DocDriftAlertSchema>;
@@ -91,3 +96,4 @@ export type BlastRadiusResult = z.infer<typeof BlastRadiusResultSchema>;
 export type CitationValidationTelemetry = z.infer<typeof CitationValidationTelemetrySchema>;
 export type PRAnalysisResponse = z.infer<typeof PRAnalysisResponseSchema>;
 export type PRCommentResponse = z.infer<typeof PRCommentResponseSchema>;
+export type VerifyGeminiKeyResponse = z.infer<typeof VerifyGeminiKeyResponseSchema>;
